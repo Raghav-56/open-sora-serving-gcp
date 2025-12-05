@@ -129,3 +129,5 @@ docker-compose.override.yml
 # Local config
 config.local.yaml
 .secrets/
+
+.myconfig

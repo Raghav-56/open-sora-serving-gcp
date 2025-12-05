@@ -62,7 +62,8 @@ WORKDIR /app
 RUN git clone --depth 1 https://github.com/Raghav-56/Open-Sora.git /app
 
 # Install Open-Sora and dependencies using native uv sync
-RUN uv sync --frozen --no-dev
+# Using --no-cache to reduce memory usage during build
+RUN uv sync --no-dev --no-cache
 
 # Install flash-attention (optional, requires build)
 # Using --no-build-isolation to use existing CUDA environment
@@ -103,7 +104,7 @@ RUN mkdir -p /app/ckpts /tmp/opensora_outputs /app/samples && \
     chmod 777 /tmp/opensora_outputs /app/samples
 
 # Set Python path for module imports
-ENV PYTHONPATH=/app:$PYTHONPATH
+ENV PYTHONPATH=/app
 
 # Expose API port
 EXPOSE 8080
