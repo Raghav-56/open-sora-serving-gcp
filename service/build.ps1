@@ -1,0 +1,1 @@
+gcloud builds submit --region=$env:REGION --tag $env:IMAGE_URI .

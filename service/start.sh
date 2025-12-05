@@ -3,6 +3,17 @@
 # Nannie AI - Proprietary System
 set -e
 
+# uv sync creates .venv during docker build, we must use it
+export VIRTUAL_ENV=/app/.venv
+export PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# Verify we're using the correct Python
+if [ ! -f "$VIRTUAL_ENV/bin/python" ]; then
+    echo "ERROR: Virtual environment not found at $VIRTUAL_ENV"
+    echo "This indicates a Docker build issue. Rebuild the image."
+    exit 1
+fi
+
 # Signal Handling for Graceful Shutdown
 cleanup() {
     echo ""
@@ -47,7 +58,8 @@ echo "    DEFAULT_NUM_FRAMES   : ${DEFAULT_NUM_FRAMES:-49}"
 echo "    DEFAULT_ASPECT_RATIO : ${DEFAULT_ASPECT_RATIO:-16:9}"
 echo ""
 echo "  Runtime:"
-echo "    Python               : $(uv run python --version 2>&1)"
+echo "    Python               : $(python --version 2>&1)"
+echo "    Which Python         : $(which python 2>&1)"
 echo ""
 
 # Check required environment variable

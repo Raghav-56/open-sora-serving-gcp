@@ -10,8 +10,6 @@ ENV PYTHONUNBUFFERED=1 \
     TZ=Etc/UTC \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     HF_HOME=/root/.cache/huggingface \
-    # uv package manager settings
-    UV_SYSTEM_PYTHON=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     # API Server (override via docker run -e)
@@ -61,7 +59,7 @@ WORKDIR /app
 # Clone Open-Sora repository
 RUN git clone --depth 1 https://github.com/Raghav-56/Open-Sora.git /app
 
-# Install Open-Sora and dependencies using native uv sync
+# Install Open-Sora and dependencies
 RUN uv sync --no-dev --no-cache
 
 # Activate the virtual environment created by uv sync
@@ -76,7 +74,6 @@ RUN uv add --no-build-isolation flash-attn || echo "Flash attention build skippe
 RUN uv add git+https://github.com/hpcaitech/tensornvme.git || echo "TensorNVMe build skipped (optional)"
 
 # Install API service dependencies using native uv add
-# Note: uvicorn pinned to 0.29.0 to match colossalai's dependency requirement
 RUN uv add \
     fastapi \
     "uvicorn[standard]" \

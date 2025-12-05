@@ -1,5 +1,5 @@
-# Load .env file (required)
-$envFile = Join-Path $PSScriptRoot ".env"
+# Load .env file from parent directory
+$envFile = Join-Path (Split-Path $PSScriptRoot -Parent) ".env"
 if (-not (Test-Path $envFile)) {
     Write-Error "Missing .env file! Copy .env.example to .env and fill in your values."
     exit 1
