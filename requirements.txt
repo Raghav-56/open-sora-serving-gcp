@@ -1,0 +1,26 @@
+# =============================================================================
+# Open-Sora API Requirements
+# =============================================================================
+# Note: The Docker image builds from nvidia/cuda:12.1.1-devel-ubuntu22.04 and
+# installs PyTorch 2.4.0, xformers, and Open-Sora from source.
+# These are the additional dependencies for the FastAPI service.
+# =============================================================================
+
+# API Service (Production)
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+google-cloud-storage==2.18.2
+loguru==0.7.2
+
+# Documentation
+mkdocs==1.6.1
+mkdocs-material==9.5.39
+pymdown-extensions==10.11.2
+
+# Development & Testing (optional - comment out for production-only installs)
+pytest==8.3.3
+pytest-asyncio==0.24.0
+httpx==0.27.2
+black==24.8.0
+ruff==0.6.9

@@ -1,0 +1,213 @@
+/* ============================================
+   Simple Nannie Documentation Theme
+   Focus on readability with Nannie colors
+   ============================================ */
+
+/* Nannie Color Palette */
+:root {
+  --nannie-coral: #FF9A85;
+  --nannie-coral-light: #FFA896;
+  --nannie-lavender: #A89CC8;
+  --nannie-purple: #8B7FB8;
+}
+
+/* Apply Nannie colors to Material theme */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: var(--nannie-coral);
+  --md-primary-fg-color--light: var(--nannie-coral-light);
+  --md-primary-fg-color--dark: var(--nannie-lavender);
+  --md-accent-fg-color: var(--nannie-coral);
+}
+
+/* ============================================
+   HEADER - Simple Nannie gradient
+   ============================================ */
+.md-header {
+  background: linear-gradient(90deg, var(--nannie-coral), var(--nannie-coral-light), var(--nannie-lavender)) !important;
+}
+
+/* ============================================
+   TABS - Nannie gradient with bold text
+   ============================================ */
+.md-tabs {
+  background: linear-gradient(90deg, var(--nannie-coral-light), var(--nannie-lavender)) !important;
+}
+
+.md-tabs__link {
+  font-weight: 700 !important;
+  color: white !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2) !important;
+}
+
+.md-tabs__link--active {
+  font-weight: 700 !important;
+}
+
+/* ============================================
+   LINKS - Darker, more visible Nannie coral
+   ============================================ */
+.md-typeset a {
+  color: #E85D42 !important;
+  font-weight: 600 !important;
+}
+
+.md-typeset a:hover {
+  color: #7B5E99 !important;
+}
+
+/* ============================================
+   HEADINGS - Black like normal text
+   ============================================ */
+.md-typeset h1 {
+  color: inherit !important;
+  font-weight: 700 !important;
+}
+
+.md-typeset h2 {
+  color: inherit !important;
+  font-weight: 600 !important;
+}
+
+.md-typeset h3 {
+  color: inherit !important;
+  font-weight: 600 !important;
+}
+
+.md-typeset h4 {
+  color: inherit !important;
+  font-weight: 600 !important;
+}
+
+/* Hide permalink symbols */
+.md-typeset .headerlink {
+  display: none !important;
+}
+
+/* ============================================
+   BUTTONS - Nannie style
+   ============================================ */
+.md-button {
+  background: var(--nannie-coral) !important;
+  color: white !important;
+  border-radius: 20px !important;
+}
+
+.md-button:hover {
+  background: var(--nannie-lavender) !important;
+}
+
+.md-button--primary {
+  background: linear-gradient(90deg, var(--nannie-coral), var(--nannie-lavender)) !important;
+}
+
+/* ============================================
+   TABLES - Nannie colored headers
+   ============================================ */
+.md-typeset table:not([class]) thead {
+  background: linear-gradient(90deg, var(--nannie-coral-light), var(--nannie-lavender)) !important;
+}
+
+.md-typeset table:not([class]) th {
+  color: white !important;
+}
+
+/* ============================================
+   ADMONITIONS - Nannie accent
+   ============================================ */
+.md-typeset .admonition {
+  border-left: 4px solid var(--nannie-coral) !important;
+}
+
+/* ============================================
+   CODE - Readable colors
+   ============================================ */
+/* Inline code */
+.md-typeset code {
+  background-color: rgba(255, 154, 133, 0.15) !important;
+  color: #c7254e !important;
+  font-weight: 500 !important;
+}
+
+/* Code blocks - with clear background and border */
+.md-typeset pre {
+  background-color: #f6f8fa !important;
+  border: 1px solid #e1e4e8 !important;
+  border-radius: 6px !important;
+  padding: 16px !important;
+}
+
+.md-typeset pre > code {
+  color: inherit !important;
+  background-color: transparent !important;
+  font-weight: normal !important;
+}
+
+/* ============================================
+   NAVIGATION - Active items
+   ============================================ */
+.md-nav__link--active {
+  color: var(--nannie-coral) !important;
+}
+
+.md-nav__link:hover {
+  color: var(--nannie-coral) !important;
+}
+
+/* ============================================
+   FOOTER - Simple creator information
+   ============================================ */
+.md-footer {
+  display: block !important;
+  background: #f6f8fa !important;
+  border-top: 1px solid #e1e4e8 !important;
+}
+
+.md-footer__inner {
+  display: flex !important;
+  justify-content: center !important;
+  padding: 1rem !important;
+}
+
+.md-footer-meta {
+  background: transparent !important;
+}
+
+.md-footer-meta__inner {
+  display: flex !important;
+  justify-content: center !important;
+}
+
+.md-footer-copyright {
+  color: #586069 !important;
+  font-size: 0.875rem !important;
+  font-weight: 500 !important;
+}
+
+.md-footer-copyright__highlight {
+  color: #586069 !important;
+}
+
+/* Force all text in footer to be visible */
+.md-footer * {
+  color: #586069 !important;
+}
+
+.md-footer a {
+  color: #586069 !important;
+}
+
+/* Hide navigation links in footer */
+.md-footer__link {
+  display: none !important;
+}
+
+.md-footer__title {
+  display: none !important;
+}
+
+/* ============================================
+   SEARCH - Nannie focus color
+   ============================================ */
+.md-search__input:focus {
+  border-color: var(--nannie-coral) !important;
+}

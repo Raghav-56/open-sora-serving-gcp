@@ -1,0 +1,66 @@
+site_name: Open-Sora API
+site_description: Production-ready video generation service for Nannie's Picasso
+site_author: Raghav Gupta
+
+# File locations
+docs_dir: markdown
+site_dir: site
+
+theme:
+  name: material
+  
+  # Simple color palette
+  palette:
+    scheme: default
+    primary: custom
+    accent: custom
+  
+  # Minimal features - only the essentials
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+
+# Simple navigation
+nav:
+  - Overview: index.md
+  - Architecture: architecture.md
+  - Deployment Guide: deployment_guide.md
+  - Local Running: local_running.md
+  - Code Reference: code_reference.md
+
+# Essential markdown extensions only
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+# Custom CSS
+extra_css:
+  - stylesheets/nannie.css
+
+# Simple plugins
+plugins:
+  - search
+
+# Minimal extra config
+extra:
+  generator: false
+
+# Creator information
+copyright: Created and updated by Raghav Gupta  • December 2025
