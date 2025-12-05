@@ -47,7 +47,7 @@ echo "    DEFAULT_NUM_FRAMES   : ${DEFAULT_NUM_FRAMES:-49}"
 echo "    DEFAULT_ASPECT_RATIO : ${DEFAULT_ASPECT_RATIO:-16:9}"
 echo ""
 echo "  Runtime:"
-echo "    Python               : $(python --version 2>&1)"
+echo "    Python               : $(uv run python --version 2>&1)"
 echo ""
 
 # Check required environment variable
@@ -70,11 +70,11 @@ if command -v nvidia-smi &> /dev/null; then
     echo "  GPU: $GPU_INFO"
     
     # Check CUDA availability in Python
-    CUDA_CHECK=$(python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Devices: {torch.cuda.device_count()}')" 2>/dev/null || echo "CUDA check failed")
+    CUDA_CHECK=$(uv run python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Devices: {torch.cuda.device_count()}')" 2>/dev/null || echo "CUDA check failed")
     echo "  $CUDA_CHECK"
     
     # Warn if no GPU detected
-    if ! python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+    if ! uv run python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
         echo ""
         echo "WARNING: CUDA not available! Video generation will be extremely slow."
         echo "  Ensure container is started with --gpus all"
@@ -88,7 +88,7 @@ echo ""
 echo "[3/4] Downloading Open-Sora v2 weights from GCS..."
 echo "-------------------------------------------------------------"
 
-python -u app/bootstrap_weights.py
+uv run python -u app/bootstrap_weights.py
 BOOTSTRAP_EXIT=$?
 
 if [ $BOOTSTRAP_EXIT -ne 0 ]; then
@@ -127,7 +127,7 @@ echo "  Server starting... (Ctrl+C to stop)"
 echo ""
 
 # Use exec to replace shell process for proper signal handling
-exec python -m uvicorn app.main:app \
+exec uv run python -m uvicorn app.main:app \
     --host 0.0.0.0 \
     --port $PORT \
     --workers 1 \

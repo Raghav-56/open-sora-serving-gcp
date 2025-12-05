@@ -58,12 +58,15 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
 
 WORKDIR /app
 
-# Clone Open-Sora repository (Raghav's fork for Nannie AI)
+# Clone Open-Sora repository
 RUN git clone --depth 1 https://github.com/Raghav-56/Open-Sora.git /app
 
 # Install Open-Sora and dependencies using native uv sync
-# Using --no-cache to reduce memory usage during build
 RUN uv sync --no-dev --no-cache
+
+# Activate the virtual environment created by uv sync
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 # Install flash-attention (optional, requires build)
 # Using --no-build-isolation to use existing CUDA environment
@@ -73,12 +76,13 @@ RUN uv add --no-build-isolation flash-attn || echo "Flash attention build skippe
 RUN uv add git+https://github.com/hpcaitech/tensornvme.git || echo "TensorNVMe build skipped (optional)"
 
 # Install API service dependencies using native uv add
+# Note: uvicorn pinned to 0.29.0 to match colossalai's dependency requirement
 RUN uv add \
-    fastapi==0.115.0 \
-    "uvicorn[standard]==0.30.6" \
+    fastapi \
+    "uvicorn[standard]" \
     pydantic==2.9.2 \
-    google-cloud-storage==2.18.2 \
-    loguru==0.7.2 \
+    google-cloud-storage \
+    loguru \
     "huggingface_hub[cli]" \
     decord \
     imageio \
