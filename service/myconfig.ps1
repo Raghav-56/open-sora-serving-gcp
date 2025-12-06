@@ -53,7 +53,9 @@ if (-not $env:MACHINE_TYPE) { $env:MACHINE_TYPE = "a2-ultragpu-1g" }
 if (-not $env:ACCELERATOR_TYPE) { $env:ACCELERATOR_TYPE = "nvidia-a100-80gb" }
 $env:SERVICE_ACCOUNT = "ml-model-serving@$($env:PROJECT_ID).iam.gserviceaccount.com"
 
+# Build container environment variables string for Vertex AI
+$env:CONTAINER_ENV_VARS = "WEIGHT_BUCKET=$($env:WEIGHT_BUCKET),WEIGHT_PREFIX=$($env:WEIGHT_PREFIX),MODEL_PATH=$($env:MODEL_PATH),PORT=$($env:PORT),JOB_RETENTION_SECONDS=$($env:JOB_RETENTION_SECONDS),MAX_COMPLETED_JOBS=$($env:MAX_COMPLETED_JOBS),DEFAULT_RESOLUTION=$($env:DEFAULT_RESOLUTION),DEFAULT_NUM_FRAMES=$($env:DEFAULT_NUM_FRAMES),DEFAULT_ASPECT_RATIO=$($env:DEFAULT_ASPECT_RATIO),GENERATION_TIMEOUT=$($env:GENERATION_TIMEOUT)"
 
 # Verify it worked
-# Write-Output $env:IMAGE_URI
-Write-Host $env:IMAGE_URI
+Write-Host "Configuration loaded:" -ForegroundColor Green
+Write-Host "  IMAGE_URI: $env:IMAGE_URI"

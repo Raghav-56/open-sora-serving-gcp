@@ -5,4 +5,5 @@ gcloud ai models upload `
   --container-health-route=/health `
   --container-predict-route=/predict `
   --container-ports=8080 `
+  --container-env-vars=$env:CONTAINER_ENV_VARS `
   --project=$env:PROJECT_ID
