@@ -30,6 +30,7 @@ theme:
 nav:
   - Overview: index.md
   - Architecture: architecture.md
+  - Configuration: configuration.md
   - Deployment Guide: deployment_guide.md
   - Local Running: local_running.md
   - Code Reference: code_reference.md

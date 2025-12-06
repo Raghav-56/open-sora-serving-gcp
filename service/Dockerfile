@@ -14,21 +14,30 @@ ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/root/.cache/huggingface \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
-    # API Server (override via docker run -e)
+    # API Server (override via docker run -e or deployment config)
     PORT=8080 \
-    # Model weights configuration
-    WEIGHT_BUCKET=nannie-opensora-weights-so \
+    # Model weights configuration (REQUIRED: set WEIGHT_BUCKET at runtime)
+    WEIGHT_BUCKET="" \
     MODEL_PATH=/app/ckpts \
     WEIGHT_PREFIX=ckpts/ \
     FORCE_DOWNLOAD=false \
     # Job manager settings
     JOB_RETENTION_SECONDS=3600 \
     MAX_COMPLETED_JOBS=100 \
-    # Video generation defaults
+    # Video generation defaults (API request defaults)
     DEFAULT_RESOLUTION=256px \
     DEFAULT_NUM_FRAMES=49 \
     DEFAULT_ASPECT_RATIO=16:9 \
-    GENERATION_TIMEOUT=1800
+    DEFAULT_MODE=t2v \
+    DEFAULT_FPS=24 \
+    DEFAULT_NUM_SAMPLES=1 \
+    # Generation parameters (runner-level defaults)
+    DEFAULT_MOTION_SCORE=4 \
+    DEFAULT_NUM_STEPS=50 \
+    DEFAULT_GUIDANCE="" \
+    DEFAULT_TIMEOUT_SECONDS="" \
+    GENERATION_TIMEOUT=1800 \
+    BASE_OUTPUT_DIR=/tmp/opensora_outputs
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -79,7 +88,7 @@ RUN uv add git+https://github.com/hpcaitech/tensornvme.git || echo "TensorNVMe b
 RUN uv add \
     fastapi \
     "uvicorn[standard]" \
-    pydantic==2.9.2 \
+    pydantic \
     google-cloud-storage \
     loguru \
     "huggingface_hub[cli]" \
@@ -90,13 +99,18 @@ RUN uv add \
 # Copy application code
 COPY app/ /app/app/
 
-# Verify app structure at build time
-RUN test -f /app/app/main.py && \
-    test -f /app/app/opensora_runner.py && \
-    test -f /app/app/worker.py && \
-    test -f /app/app/bootstrap_weights.py && \
-    test -f /app/app/gcs_io.py || \
-    (echo "ERROR: Application code incomplete" && exit 1)
+# Verify app structure at build time using Python imports
+RUN python -c "\
+from app.main import app; \
+from app.scripts.bootstrap_weights import main; \
+from app.api import create_router; \
+from app.models import VideoGenerationRequest; \
+from app.jobs import JobManager; \
+from app.opensora import OpenSoraRunner; \
+from app.worker import InferenceWorker; \
+from app.utils import upload_video_to_gcs; \
+print('✅ All imports successful')\
+" || (echo "ERROR: Application code structure validation failed" && exit 1)
 
 # Copy startup script
 COPY start.sh /app/start.sh
@@ -124,8 +138,8 @@ HEALTHCHECK --interval=60s --timeout=10s --start-period=600s --retries=3 \
 ENTRYPOINT ["/app/start.sh"]
 
 # Build Information
-LABEL maintainer="raghav56.dev@gmail.com" \
+LABEL maintainer="raghavrgupta56@gmail.com" \
       description="Open-Sora text-to-video API for Vertex AI" \
-      version="1.0.0" \
+      version="1.0.5" \
       gpu="NVIDIA H100/A100" \
       model="Open-Sora v2 (11B parameters)"

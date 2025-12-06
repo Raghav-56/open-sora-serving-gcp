@@ -4,7 +4,11 @@ Complete guide for deploying Open-Sora v2 to Google Cloud Vertex AI.
 
 Nannie AI - Proprietary System
 
+!!! info "Configuration Reference"
+    See [Configuration Guide](configuration.md) for detailed environment variable documentation.
+
 ## Table of Contents
+
 1. [Prerequisites](#prerequisites)
 2. [Configuration](#configuration)
 3. [Deployment Steps](#deployment-steps)
@@ -13,6 +17,7 @@ Nannie AI - Proprietary System
 ## Prerequisites
 
 ### Required Access
+
 - Google Cloud Project with billing enabled
 - Service Account with required permissions
 - GCS Bucket for model weights (~50GB required)
@@ -33,6 +38,7 @@ gsutil -m cp -r ./ckpts/* gs://YOUR_BUCKET/ckpts/
 ```
 
 ### Required IAM Permissions
+
 The service account needs:
 
 - `Storage Object Viewer` - Read model weights

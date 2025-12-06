@@ -12,9 +12,10 @@ from typing import Optional
 
 from loguru import logger
 
-from app.gcs_io import upload_video_to_gcs
-from app.job_manager import JobManager, JobStatus
-from app.opensora_runner import OpenSoraRunner
+from app.utils.gcs_io import upload_video_to_gcs
+from app.jobs import JobManager, JobStatus
+from app.opensora import OpenSoraRunner
+from app.core.config import GENERATION_TIMEOUT, BASE_OUTPUT_DIR
 
 
 class InferenceWorker:
@@ -41,13 +42,11 @@ class InferenceWorker:
         """
         self.runner = runner
         self.job_manager = job_manager
-        self.base_output_dir = Path("/tmp/opensora_outputs")
+        self.base_output_dir = Path(BASE_OUTPUT_DIR)
         self.base_output_dir.mkdir(parents=True, exist_ok=True)
         
         # Configurable timeout
-        self.generation_timeout = int(
-            os.getenv("GENERATION_TIMEOUT", "1800")
-        )
+        self.generation_timeout = GENERATION_TIMEOUT
 
         self._running = False
         self._worker_thread: Optional[Thread] = None

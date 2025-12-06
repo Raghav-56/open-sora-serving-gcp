@@ -1,5 +1,5 @@
 """
-Model wrapper for video generation.
+Open-Sora v2 runner for text-to-video generation.
 
 Open-Sora v2 Reference:
 - Model: 11B parameter text-to-video model
@@ -11,30 +11,29 @@ Open-Sora v2 Reference:
 import os
 import random
 import subprocess
+import tempfile
+import csv
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
-from dataclasses import dataclass
 from collections import deque
-import csv
-import tempfile
 
 import torch
 from loguru import logger
 
-
-@dataclass
-class OpenSoraConfig:
-    """Open-Sora v2 model configuration."""
-    model_type: str = "flux"
-    hidden_size: int = 3072
-    num_heads: int = 24
-    depth: int = 19
-    depth_single_blocks: int = 38
-    vae_type: str = "hunyuan_vae"
-    latent_channels: int = 16
-    default_num_steps: int = 50
-    default_guidance: float = 7.5
-    default_fps: int = 24
+from app.opensora.config import (
+    OpenSoraConfig,
+    MODE_CONFIGS,
+    VALID_ASPECT_RATIOS,
+    VALID_NUM_FRAMES,
+    DEFAULT_NUM_FRAMES,
+    DEFAULT_NUM_STEPS,
+    DEFAULT_MOTION_SCORE_ENV,
+    DEFAULT_NUM_STEPS_ENV,
+    DEFAULT_GUIDANCE_ENV,
+    DEFAULT_FPS_ENV,
+    DEFAULT_TIMEOUT_SECONDS_ENV,
+)
+from app.opensora.command_builder import CommandBuilder
 
 
 class OpenSoraRunner:
@@ -48,23 +47,6 @@ class OpenSoraRunner:
     
     This wrapper uses t2i2v mode for best quality results.
     """
-    
-    MODE_CONFIGS = {
-        "t2i2v": {
-            "256px": "configs/diffusion/inference/t2i2v_256px.py",
-            "768px": "configs/diffusion/inference/t2i2v_768px.py",
-        },
-        "t2v": {
-            "256px": "configs/diffusion/inference/256px.py",
-            "768px": "configs/diffusion/inference/768px.py",
-        },
-    }
-    
-    VALID_ASPECT_RATIOS = ["16:9", "9:16", "1:1", "2.39:1"]
-    VALID_NUM_FRAMES = [17, 33, 49, 65, 81, 97, 113, 129]
-    DEFAULT_NUM_FRAMES = 49
-    DEFAULT_NUM_STEPS = 50
-    DEFAULT_ASPECT_RATIO = "16:9"
     
     def __init__(self, model_path: str, opensora_dir: Optional[str] = None):
         """Initialize Open-Sora runner with model checkpoint path."""
@@ -109,7 +91,7 @@ class OpenSoraRunner:
                 f"Open-Sora inference script not found at {inference_script}"
             )
         
-        for mode, configs in self.MODE_CONFIGS.items():
+        for mode, configs in MODE_CONFIGS.items():
             for resolution, config_path in configs.items():
                 full_path = self.opensora_dir / config_path
                 if not full_path.exists():
@@ -174,12 +156,10 @@ class OpenSoraRunner:
         num_frames: int = 49,
         aspect_ratio: str = "16:9",
         seed: Optional[int] = None,
-        num_steps: int = 50,
-        motion_score: Union[
-            int, str
-        ] = 4,  # Supports integers 1-5 or "dynamic"
+        num_steps: Optional[int] = None,
+        motion_score: Union[int, str] = 4,
         mode: str = "t2i2v",
-        fps: int = 24,
+        fps: Optional[int] = None,
         num_samples: int = 1,
         guidance: Optional[float] = None,
         prompt_refine: bool = False,
@@ -206,36 +186,77 @@ class OpenSoraRunner:
             timeout_seconds: Override per-job timeout (seconds)
             
         Returns:
-            Tuple of (video_path, seed_used)
+            Tuple of (video_paths, seed_used, log_tail)
         """
         mode = mode.lower()
-        if mode not in self.MODE_CONFIGS:
+        if mode not in MODE_CONFIGS:
             raise ValueError(
-                f"Invalid mode: {mode}. Choose from {list(self.MODE_CONFIGS)}"
+                f"Invalid mode: {mode}. Choose from {list(MODE_CONFIGS)}"
             )
 
-        if resolution not in self.MODE_CONFIGS[mode]:
+        if resolution not in MODE_CONFIGS[mode]:
             raise ValueError(
                 f"Invalid resolution {resolution} for mode {mode}"
             )
         
-        if aspect_ratio not in self.VALID_ASPECT_RATIOS:
+        if aspect_ratio not in VALID_ASPECT_RATIOS:
             raise ValueError(f"Invalid aspect_ratio: {aspect_ratio}")
         
-        if num_frames not in self.VALID_NUM_FRAMES:
+        if num_frames not in VALID_NUM_FRAMES:
             closest = min(
-                self.VALID_NUM_FRAMES,
+                VALID_NUM_FRAMES,
                 key=lambda x: abs(x - num_frames),
             )
             logger.warning(f"Adjusting frames {num_frames} -> {closest}")
             num_frames = closest
 
-        if isinstance(motion_score, str):
+        # Resolve defaults from env for commonly tweaked knobs
+        resolved_motion_default = DEFAULT_MOTION_SCORE_ENV
+        resolved_num_steps = (
+            int(DEFAULT_NUM_STEPS_ENV)
+            if DEFAULT_NUM_STEPS_ENV and DEFAULT_NUM_STEPS_ENV.isdigit()
+            else DEFAULT_NUM_STEPS
+        )
+        resolved_fps = (
+            int(DEFAULT_FPS_ENV)
+            if DEFAULT_FPS_ENV and DEFAULT_FPS_ENV.isdigit()
+            else self.config.default_fps
+        )
+        resolved_timeout = None
+        if (
+            DEFAULT_TIMEOUT_SECONDS_ENV
+            and DEFAULT_TIMEOUT_SECONDS_ENV.isdigit()
+        ):
+            resolved_timeout = int(DEFAULT_TIMEOUT_SECONDS_ENV)
+
+        if guidance is None and DEFAULT_GUIDANCE_ENV is not None:
+            try:
+                guidance = float(DEFAULT_GUIDANCE_ENV)
+            except ValueError:
+                logger.warning("Invalid DEFAULT_GUIDANCE; ignoring")
+
+        if motion_score is None:
+            if resolved_motion_default == "dynamic":
+                motion_score = "dynamic"
+            else:
+                try:
+                    motion_score = int(resolved_motion_default)
+                except ValueError:
+                    logger.warning(
+                        "Invalid DEFAULT_MOTION_SCORE; falling back to 4"
+                    )
+                    motion_score = 4
+        elif isinstance(motion_score, str):
             if motion_score != "dynamic":
                 raise ValueError("motion_score must be 1-5 or 'dynamic'")
         else:
             if not 1 <= int(motion_score) <= 5:
                 raise ValueError("motion_score must be between 1 and 5")
+
+        # Resolve numeric defaults now that validation is done
+        num_steps = num_steps or resolved_num_steps
+        fps = fps or resolved_fps
+        effective_timeout = timeout_seconds or resolved_timeout or 1800
 
         if num_samples < 1:
             raise ValueError("num_samples must be >= 1")
@@ -243,7 +264,7 @@ class OpenSoraRunner:
         if seed is None:
             seed = random.randint(0, 2**31 - 1)
         
-        config_path = self.MODE_CONFIGS[mode][resolution]
+        config_path = MODE_CONFIGS[mode][resolution]
         output_dir = Path(save_dir) if save_dir else self.default_output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
         log_dir = output_dir / "logs"
@@ -298,54 +319,28 @@ class OpenSoraRunner:
                 temp_prompt_file.close()
             raise
         
-        cmd = [
-            "torchrun",
-            "--nproc_per_node", str(nproc),
-            "--standalone",
-            "scripts/diffusion/inference.py",
-            config_path,
-            "--save-dir", str(output_dir),
-            *prompt_arg,
-            "--seed", str(seed),
-            "--sampling_option.seed", str(seed),
-            "--sampling_option.num_frames", str(num_frames),
-            "--sampling_option.num_steps", str(num_steps),
-            "--aspect_ratio", aspect_ratio,
-            "--motion-score", str(motion_score),
-            "--fps_save", str(fps),
-            "--num_sample", str(num_samples),
-        ]
-
-        if guidance is not None:
-            cmd.extend(["--guidance", str(guidance)])
-
-        if prompt_refine:
-            cmd.extend(["--prompt_refine", "True"])
-
-        # Explicitly point to weights to avoid relying on cwd
-        cmd.extend([
-            "--model.from_pretrained",
-            str(self.model_path / "Open_Sora_v2.safetensors"),
-            "--ae.from_pretrained",
-            str(self.model_path / "hunyuan_vae.safetensors"),
-            "--t5.from_pretrained",
-            str(self.model_path / "google" / "t5-v1_1-xxl"),
-            "--clip.from_pretrained",
-            str(self.model_path / "openai" / "clip-vit-large-patch14"),
-        ])
-
-        if mode == "t2i2v":
-            cmd.extend([
-                "--img_flux.from_pretrained",
-                str(self.model_path / "flux1-dev.safetensors"),
-                "--img_flux_ae.from_pretrained",
-                str(self.model_path / "flux1-dev-ae.safetensors"),
-            ])
+        # Build command using CommandBuilder
+        cmd = CommandBuilder.build_inference_command(
+            config_path=config_path,
+            output_dir=output_dir,
+            prompt_arg=prompt_arg,
+            seed=seed,
+            num_frames=num_frames,
+            num_steps=num_steps,
+            aspect_ratio=aspect_ratio,
+            motion_score=motion_score,
+            fps=fps,
+            num_samples=num_samples,
+            guidance=guidance,
+            prompt_refine=prompt_refine,
+            model_path=self.model_path,
+            mode=mode,
+            nproc=nproc,
+        )
         
         env = os.environ.copy()
         env["PYTHONPATH"] = str(self.opensora_dir)
         env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-        effective_timeout = timeout_seconds or 1800
         
         try:
             process = subprocess.Popen(
@@ -404,10 +399,11 @@ class OpenSoraRunner:
         video_files: List[Path] = []
         for ext in ["mp4", "avi", "mov", "webm"]:
             video_files.extend(output_dir.glob(f"**/*.{ext}"))
-        return sorted(
-            video_files, key=lambda p: p.stat().st_mtime, reverse=True
-        )
-
+        
+        # Sort by modification time (newest first)
+        video_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return video_files
+    
     def is_ready(self) -> bool:
         """Check if runner is ready for inference."""
         return self._ready
@@ -419,10 +415,10 @@ class OpenSoraRunner:
             "model_path": str(self.model_path),
             "ready": self._ready,
             "num_gpus": self.num_gpus,
-            "resolutions": list(next(iter(self.MODE_CONFIGS.values())).keys()),
-            "modes": list(self.MODE_CONFIGS.keys()),
-            "aspect_ratios": self.VALID_ASPECT_RATIOS,
-            "valid_frame_counts": self.VALID_NUM_FRAMES,
+            "resolutions": list(next(iter(MODE_CONFIGS.values())).keys()),
+            "modes": list(MODE_CONFIGS.keys()),
+            "aspect_ratios": VALID_ASPECT_RATIOS,
+            "valid_frame_counts": VALID_NUM_FRAMES,
         }
         
         if self.device == "cuda" and self.num_gpus > 0:

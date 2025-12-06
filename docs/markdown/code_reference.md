@@ -248,13 +248,12 @@ Root endpoint with API information.
 
 Container startup script that:
 
-1. Downloads model weights from GCS via `bootstrap_weights.py`
+1. Downloads model weights from GCS via `app.scripts.bootstrap_weights`
 2. Starts FastAPI server with uvicorn
 
-### app/bootstrap_weights.py
+### app/scripts/bootstrap_weights.py
 
 Downloads Open-Sora v2 weights from GCS before API starts.
-
 
 **Required Files:**
 
@@ -272,13 +271,26 @@ Downloads Open-Sora v2 weights from GCS before API starts.
 | `MODEL_PATH` | `/app/ckpts` | Local destination |
 | `FORCE_DOWNLOAD` | `false` | Re-download if true |
 
-### app/gcs_io.py
+### app/utils/gcs_io.py
 
 GCS utilities for uploading videos and downloading weights.
 
-### app/opensora_runner.py
+**Key Functions:**
 
-Wrapper around Open-Sora v2 inference using `torchrun`.
+- `upload_video_to_gcs()`: Upload generated videos
+- `download_directory()`: Download model weights
+- `download_blob()`: Download single file
+- `save_video_locally()`: Save video to local disk
+
+### app/opensora/
+
+Open-Sora model wrapper modules.
+
+**Module Structure:**
+
+- `config.py`: Model configuration constants (`VALID_RESOLUTIONS`, `MODE_CONFIGS`)
+- `command_builder.py`: Builds `torchrun` CLI commands
+- `runner.py`: `OpenSoraRunner` class - main model interface
 
 **Resolution Configs:**
 
@@ -287,9 +299,14 @@ Wrapper around Open-Sora v2 inference using `torchrun`.
 | `256px` | `t2i2v_256px.py` | Fast generation |
 | `768px` | `t2i2v_768px.py` | High quality |
 
-### app/job_manager.py
+### app/jobs/
 
-Manages async job queue with status tracking.
+Job queue management modules.
+
+**Module Structure:**
+
+- `models.py`: `Job` dataclass (20 fields) and `JobStatus` enum
+- `manager.py`: `JobManager` class with thread-safe queue operations
 
 **Environment Variables:**
 
@@ -318,8 +335,48 @@ Background worker thread that processes jobs sequentially.
 
 ### app/main.py
 
-FastAPI application with all endpoint definitions.
-Uses lifespan context manager for startup/shutdown events.
+Minimal FastAPI application assembly (73 lines).
+
+**Module Structure:**
+
+- `main.py`: FastAPI app creation and router registration
+- `core/config.py`: Environment variables and validation constants
+- `core/lifespan.py`: Startup/shutdown lifecycle (AsyncContextManager)
+- `models/requests.py`: `VideoGenerationRequest` with 7 field validators
+- `models/responses.py`: API response schemas
+- `api/health.py`: Health check endpoints (`/health`, `/`)
+- `api/generation.py`: Video generation endpoints (`/predict`, `/v1/generate`)
+- `api/jobs.py`: Job management endpoints (`/v1/jobs/{job_id}`, `/v1/queue`)
+- `utils/exceptions.py`: Custom exception classes (6 types)
+
+**Import Patterns:**
+
+```python
+# Configuration
+from app.core.config import get_config
+
+# Models
+from app.models.requests import VideoGenerationRequest
+from app.models.responses import JobSubmissionResponse
+
+# Jobs
+from app.jobs.models import Job, JobStatus
+from app.jobs.manager import JobManager
+
+# Open-Sora
+from app.opensora.runner import OpenSoraRunner
+
+# Utils
+from app.utils.gcs_io import upload_video_to_gcs
+from app.utils.exceptions import OpenSoraServiceError
+```
+
+**Modular Benefits:**
+
+- **Testability**: Each module can be unit tested independently
+- **Maintainability**: Changes isolated to relevant modules
+- **Readability**: Clear separation of concerns (73-line main vs. 605-line monolith)
+- **Scalability**: Easy to add new features without touching core logic
 
 ---
 

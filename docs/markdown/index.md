@@ -37,21 +37,23 @@ graph TB
     
     subgraph "2. Container Startup"
         F --> G[start.sh<br/>🚀 Initialization Script]
-        G --> H[bootstrap_weights.py<br/>⬇️ Download AI Model]
+        G --> H[app/scripts/bootstrap_weights.py<br/>⬇️ Download AI Model]
         H --> I[GCS Bucket<br/>☁️ Open-Sora Weights]
         H --> J[Model Loaded<br/>✅ Ready]
-        J --> K[main.py<br/>🌐 FastAPI Web Server]
+        J --> K[app/main.py<br/>🌐 FastAPI App Assembly]
+        K --> K1[app/core/lifespan.py<br/>🔄 Startup/Shutdown]
     end
     
     subgraph "3. API Runtime"
-        K --> L[job_manager.py<br/>📋 Job Queue & Tracking]
-        K --> M[worker.py<br/>⚙️ Background Processing]
-        K --> N[opensora_runner.py<br/>🎬 Video Generation Engine]
+        K1 --> L[app/jobs/manager.py<br/>📋 Job Queue & Tracking]
+        K1 --> M[app/worker.py<br/>⚙️ Background Processing]
+        K --> N1[app/api/<br/>🔌 API Endpoints]
+        N1 --> N2[app/opensora/runner.py<br/>🎬 Video Generation Engine]
         
-        M --> N
-        M --> O[gcs_io.py<br/>💾 Cloud Storage Helper]
+        M --> N2
+        M --> O[app/utils/gcs_io.py<br/>💾 Cloud Storage Helper]
         O --> P[GCS Bucket<br/>☁️ Generated Videos]
-        N --> M
+        N2 --> M
         L --> M
     end
     

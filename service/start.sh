@@ -110,7 +110,7 @@ echo ""
 echo "[3/4] Downloading Open-Sora v2 weights from GCS..."
 echo "-------------------------------------------------------------"
 
-uv run python -u app/bootstrap_weights.py
+uv run python -m app.scripts.bootstrap_weights
 BOOTSTRAP_EXIT=$?
 
 if [ $BOOTSTRAP_EXIT -ne 0 ]; then
@@ -154,5 +154,4 @@ exec uv run python -m uvicorn app.main:app \
     --port $PORT \
     --workers 1 \
     --log-level info \
-    --no-access-log \
-    --timeout-keep-alive 300
+    --timeout-keep-alive 1200

@@ -25,6 +25,14 @@ A production-ready text-to-video generation API using Open-Sora v2 (11B model) d
 open-sora-serving-gcp/
 ├── README.md
 ├── requirements.txt
+├── .env.example              # Configuration template
+├── ENV_VARS.md               # Environment variable guide
+├── scripts/                  # Build/deploy PowerShell scripts
+│   ├── myconfig.ps1         # Loads .env (create from .env.example)
+│   ├── build.ps1
+│   ├── deploy.ps1
+│   ├── api.ps1
+│   └── client.py
 ├── docs/
 │   ├── mkdocs.yml
 │   └── markdown/
@@ -38,13 +46,54 @@ open-sora-serving-gcp/
     ├── start.sh
     └── app/
         ├── __init__.py
-        ├── main.py
-        ├── opensora_runner.py
-        ├── job_manager.py
-        ├── worker.py
-        ├── gcs_io.py
-        └── bootstrap_weights.py
+        ├── main.py           # FastAPI app assembly
+        ├── worker.py         # Background job processor
+        ├── core/             # Configuration & lifecycle
+        │   ├── __init__.py
+        │   ├── config.py     # Environment variables & constants
+        │   └── lifespan.py   # Startup/shutdown management
+        ├── models/           # Pydantic schemas
+        │   ├── __init__.py
+        │   ├── requests.py   # VideoGenerationRequest with validators
+        │   └── responses.py  # API response models
+        ├── jobs/             # Job queue management
+        │   ├── __init__.py
+        │   ├── models.py     # Job dataclass & JobStatus enum
+        │   └── manager.py    # JobManager (thread-safe queue)
+        ├── opensora/         # Open-Sora model wrapper
+        │   ├── __init__.py
+        │   ├── config.py     # Model configuration
+        │   ├── command_builder.py  # CLI command construction
+        │   └── runner.py     # OpenSoraRunner (model interface)
+        ├── api/              # FastAPI routers
+        │   ├── __init__.py
+        │   ├── health.py     # Health check endpoints
+        │   ├── generation.py # Video generation endpoints
+        │   └── jobs.py       # Job status endpoints
+        ├── utils/            # Utilities
+        │   ├── __init__.py
+        │   ├── exceptions.py # Custom exceptions
+        │   └── gcs_io.py     # GCS upload/download
+        └── scripts/          # Bootstrap scripts
+            ├── __init__.py
+            └── bootstrap_weights.py  # Model weight download
 ```
+
+### Architecture
+
+The service uses a **modular architecture** with clear separation of concerns:
+
+- **`main.py`**: Minimal FastAPI app assembly
+- **`core/`**: Configuration management and application lifecycle
+- **`models/`**: Pydantic request/response schemas with validation
+- **`jobs/`**: Thread-safe job queue and state management
+- **`opensora/`**: Open-Sora model wrapper with configuration
+- **`api/`**: FastAPI routers organized by domain (health, generation, jobs)
+- **`utils/`**: Shared utilities (GCS I/O, custom exceptions)
+- **`scripts/`**: Bootstrap scripts for weight management
+- **`worker.py`**: Background thread for async job processing
+
+This structure has maintainability, testability, and code clarity
 
 ## Quick Start
 
@@ -54,15 +103,32 @@ open-sora-serving-gcp/
 - Google Cloud CLI authenticated
 - Access to model weights GCS bucket
 
+### Configuration Setup
+
+```powershell
+# 1. Create local environment configuration for scripts
+Copy-Item .env.example .env
+# Edit .env with your GCP project settings
+
+# 2. For container runtime, set variables when deploying
+# See ENV_VARS.md for comprehensive guide on environment variables
+```
+
 ### Local Development
 
-```bash
+```powershell
 cd service
 docker build -t opensora-api:dev .
-docker run --gpus all -p 8081:8080 \
-  -e WEIGHT_BUCKET=your-weights-bucket \
+
+# Run with required environment variables
+docker run --gpus all -p 8081:8080 `
+  -e WEIGHT_BUCKET=your-weights-bucket `
+  -e WEIGHT_PREFIX=opensora_v2 `
+  -e OUTPUT_BUCKET=your-output-bucket `
   opensora-api:dev
 ```
+
+> **Note**: See [`ENV_VARS.md`](ENV_VARS.md) for complete environment variable reference.
 
 ### Test the API
 
@@ -117,7 +183,17 @@ Then open `http://localhost:8000`
 
 ## Deployment
 
-See [Deployment Guide](docs/markdown/deployment_guide.md) for full Vertex AI deployment instructions.
+Using PowerShell scripts (requires `.env` configuration):
+
+```powershell
+# Build and push container
+.\scripts\build.ps1
+
+# Deploy to Vertex AI
+.\scripts\deploy.ps1
+```
+
+See [Deployment Guide](docs/markdown/deployment_guide.md) for full Vertex AI deployment instructions and [`ENV_VARS.md`](ENV_VARS.md) for environment variable reference.
 
 ## Maintainer
 

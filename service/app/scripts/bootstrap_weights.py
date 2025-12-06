@@ -12,7 +12,8 @@ sys.path.insert(0, "/app")
 
 from loguru import logger
 
-from app.gcs_io import download_directory
+from app.utils.gcs_io import download_directory
+from app.core.config import WEIGHT_BUCKET, WEIGHT_PREFIX, MODEL_PATH, FORCE_DOWNLOAD
 
 
 class WeightBootstrapper:
@@ -169,7 +170,9 @@ class WeightBootstrapper:
             logger.info("✅ Weights already exist locally, skipping download")
         else:
             if force_download:
-                logger.info("⚠️  Force download enabled, re-downloading weights")
+                logger.info(
+                    "⚠️  Force download enabled, re-downloading weights"
+                )
             self.download_weights(skip_existing=not force_download)
 
         self.verify_weights()
@@ -182,14 +185,14 @@ def main():
     Main entry point for weight bootstrap script.
     Called from start.sh before starting the API server.
     """
-    bucket_name = os.getenv("WEIGHT_BUCKET")
+    bucket_name = WEIGHT_BUCKET
     if not bucket_name:
         logger.error("❌ WEIGHT_BUCKET environment variable is required")
         sys.exit(1)
 
-    source_prefix = os.getenv("WEIGHT_PREFIX", "ckpts/")
-    destination_dir = os.getenv("MODEL_PATH", "/app/ckpts")
-    force_download = os.getenv("FORCE_DOWNLOAD", "false").lower() == "true"
+    source_prefix = WEIGHT_PREFIX
+    destination_dir = MODEL_PATH
+    force_download = FORCE_DOWNLOAD
 
     logger.info("📋 Bootstrap Configuration:")
     logger.info(f"   WEIGHT_BUCKET: {bucket_name}")

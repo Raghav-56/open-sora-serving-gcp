@@ -1,4 +1,4 @@
-gcloud ai endpoints deploy-model $env:ENDPOINT_ID `
+gcloud ai endpoints deploy-model 254130122527866880 `
   --region=$env:REGION `
   --model=$env:MODEL_ID `
   --display-name="opensora-deployment-v1" `

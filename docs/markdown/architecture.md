@@ -74,7 +74,7 @@ This is a classic **producer-consumer pattern**:
 4. If bootstrap succeeds → start FastAPI server
 ```
 
-### 2. Weight Bootstrapping (`app/bootstrap_weights.py`)
+### 2. Weight Bootstrapping (`app/scripts/bootstrap_weights.py`)
 
 **Purpose**: Download model weights from GCS to local disk before API starts
 
@@ -87,7 +87,7 @@ This is a classic **producer-consumer pattern**:
 4. Exit with error code if verification fails
 ```
 
-### 3. GCS I/O (`app/gcs_io.py`)
+### 3. GCS I/O (`app/utils/gcs_io.py`)
 
 **Purpose**: Centralized module for all Google Cloud Storage operations
 
@@ -99,9 +99,15 @@ This is a classic **producer-consumer pattern**:
 - `download_directory()`: Downloads model weights from GCS
 - `download_blob()`: Downloads a single file
 
-### 4. Open-Sora Runner (`app/opensora_runner.py`)
+### 4. Open-Sora Runner (`app/opensora/`)
 
 **Purpose**: Wrapper around the Open-Sora model
+
+**Module Structure**:
+
+- `config.py`: Model configuration constants and MODE_CONFIGS
+- `command_builder.py`: Builds torchrun CLI commands
+- `runner.py`: OpenSoraRunner class (main interface)
 
 **What it does**:
 
@@ -118,9 +124,14 @@ This is a classic **producer-consumer pattern**:
 
 **Motion Score**: Controls motion intensity (1-5 or "dynamic", default 4). Lower values produce calmer videos, higher values produce more dynamic motion.
 
-### 5. Job Manager (`app/job_manager.py`)
+### 5. Job Manager (`app/jobs/`)
 
 **Purpose**: Manages the job queue and tracks job status
+
+**Module Structure**:
+
+- `models.py`: Job dataclass and JobStatus enum
+- `manager.py`: JobManager class (thread-safe queue operations)
 
 **Key Classes**:
 
@@ -147,9 +158,20 @@ Return job_id immediately      |
                                |  ← Mark job complete with URIs/log tail
 ```
 
-### 7. Main API (`app/main.py`)
+### 7. Main API (`app/main.py` and `app/api/`)
 
 **Purpose**: FastAPI application that handles HTTP requests
+
+**Module Structure**:
+
+- `main.py`: Minimal FastAPI app assembly (73 lines, down from 605)
+- `core/config.py`: Environment variables and validation constants
+- `core/lifespan.py`: Startup/shutdown lifecycle management
+- `models/requests.py`: VideoGenerationRequest with 7 field validators
+- `models/responses.py`: API response schemas
+- `api/health.py`: Health check endpoints
+- `api/generation.py`: Video generation endpoints
+- `api/jobs.py`: Job status endpoints
 
 **Key Endpoints**:
 
@@ -159,6 +181,13 @@ Return job_id immediately      |
 - `GET /v1/jobs/{job_id}`: Get job status
 - `DELETE /v1/jobs/{job_id}`: Cancel job
 - `GET /v1/queue`: Get queue status
+
+**Modular Design Benefits**:
+
+- **Separation of Concerns**: Each module has a single, clear responsibility
+- **Testability**: Smaller modules are easier to unit test
+- **Maintainability**: Changes isolated to relevant modules
+- **Readability**: 73-line main.py vs. 605-line monolithic file
 
 ---
 
@@ -239,13 +268,58 @@ open-sora-serving-gcp/service/
 │
 └── app/                       # Python application package
     ├── __init__.py            # Makes 'app' a Python package
-    ├── main.py                # FastAPI application (entry point)
-    ├── bootstrap_weights.py   # Model weight downloader
-    ├── opensora_runner.py     # ML model wrapper
-    ├── gcs_io.py              # Google Cloud Storage utilities
-    ├── job_manager.py         # Job queue and status tracking
-    └── worker.py              # Background worker thread
+    ├── main.py                # FastAPI application (73 lines)
+    ├── worker.py              # Background worker thread
+    │
+    ├── core/                  # Configuration & lifecycle
+    │   ├── __init__.py
+    │   ├── config.py          # Environment variables & constants
+    │   └── lifespan.py        # Startup/shutdown management
+    │
+    ├── models/                # Pydantic schemas
+    │   ├── __init__.py
+    │   ├── requests.py        # VideoGenerationRequest
+    │   └── responses.py       # API response models
+    │
+    ├── jobs/                  # Job queue management
+    │   ├── __init__.py
+    │   ├── models.py          # Job dataclass & JobStatus enum
+    │   └── manager.py         # JobManager (thread-safe queue)
+    │
+    ├── opensora/              # Open-Sora model wrapper
+    │   ├── __init__.py
+    │   ├── config.py          # Model configuration
+    │   ├── command_builder.py # CLI command construction
+    │   └── runner.py          # OpenSoraRunner (model interface)
+    │
+    ├── api/                   # FastAPI routers
+    │   ├── __init__.py
+    │   ├── health.py          # Health check endpoints
+    │   ├── generation.py      # Video generation endpoints
+    │   └── jobs.py            # Job status endpoints
+    │
+    ├── utils/                 # Utilities
+    │   ├── __init__.py
+    │   ├── exceptions.py      # Custom exceptions
+    │   └── gcs_io.py          # GCS upload/download
+    │
+    └── scripts/               # Bootstrap scripts
+        ├── __init__.py
+        └── bootstrap_weights.py  # Model weight download
 ```
+
+**Modular Architecture**:
+
+follows **domain-driven design** pattern:
+
+- **`core/`**: Application-wide configuration and lifecycle (config, lifespan)
+- **`models/`**: Data validation layer (Pydantic schemas)
+- **`jobs/`**: Job queue domain (queue management, state tracking)
+- **`opensora/`**: Model domain (runner, config, command builder)
+- **`api/`**: API layer (organized by endpoint purpose)
+- **`utils/`**: Cross-cutting concerns (GCS I/O, exceptions)
+- **`scripts/`**: Operational scripts (weight bootstrap)
+
 
 ---
 
