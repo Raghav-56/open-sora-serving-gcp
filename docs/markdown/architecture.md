@@ -3,6 +3,7 @@
 This documentation is for individuals curious about how this API is designed. Below sections provide the overall **rationale** of the architecture design.
 
 ## Table of Contents
+
 1. [Why This Architecture?](#why-this-architecture)
 2. [Component Breakdown](#component-breakdown)
 3. [Request Flow](#request-flow)
@@ -15,25 +16,26 @@ This documentation is for individuals curious about how this API is designed. Be
 
 ### Problem: Video Generation is Slow and Resource-Intensive
 
-**Challenge 1: Long Processing Time**
+#### Challenge 1: Long Processing Time
 
 - Video generation takes 2-15 minutes per request depending on resolution
 - HTTP requests would timeout if we waited for completion
 - **Solution**: Async job queue - return job_id immediately, process in background
 
-**Challenge 2: Limited GPU Memory**
+#### Challenge 2: Limited GPU Memory
 
 - GPU can only process one video at a time
 - Multiple simultaneous requests would cause OOM errors
-- **Solution**: Sequential job queue with worker thread
+- **Solution**: Sequential job queue with worker thread and per-job
+  output/log directories
 
-**Challenge 3: Model Weights are Large**
+#### Challenge 3: Model Weights are Large
 
 - Open-Sora weights are several GB
 - Downloading weights during each container start would be slow
 - **Solution**: Bootstrap script downloads weights once at startup, before API starts
 
-**Challenge 4: Vertex AI Requirements**
+#### Challenge 4: Vertex AI Requirements
 
 - Must respond to `/health` endpoint
 - Must handle `/predict` POST requests
@@ -42,7 +44,7 @@ This documentation is for individuals curious about how this API is designed. Be
 
 ### Architecture Pattern: Producer-Consumer Queue
 
-```
+```text
 Client Request → FastAPI (Producer) → Job Queue → Worker Thread (Consumer) → Video Generation
                       ↓                                                              ↓
                    Job ID returned                                           Upload to GCS
@@ -64,6 +66,7 @@ This is a classic **producer-consumer pattern**:
 **Purpose**: Orchestrates container initialization in the correct order
 
 **What it does**:
+
 ```bash
 1. Set environment variables
 2. Run bootstrap_weights.py (download model weights)
@@ -76,6 +79,7 @@ This is a classic **producer-consumer pattern**:
 **Purpose**: Download model weights from GCS to local disk before API starts
 
 **What it does**:
+
 ```python
 1. Check if weights already exist locally (from previous container run)
 2. If missing → download from GCS bucket
@@ -88,7 +92,9 @@ This is a classic **producer-consumer pattern**:
 **Purpose**: Centralized module for all Google Cloud Storage operations
 
 **Functions**:
-- `upload_video_to_gcs()`: Uploads generated video to GCS
+
+- `upload_video_to_gcs()`: Uploads generated videos (supports multiple
+  samples) to GCS
 - `save_video_locally()`: Saves video to local disk
 - `download_directory()`: Downloads model weights from GCS
 - `download_blob()`: Downloads a single file
@@ -98,22 +104,26 @@ This is a classic **producer-consumer pattern**:
 **Purpose**: Wrapper around the Open-Sora model
 
 **What it does**:
+
 - Verifies model weights exist (main checkpoint, VAE, T5, CLIP)
 - Detects GPU configuration
 - Runs `torchrun` subprocess for video generation
-- Returns generated video path and seed used
+- Returns generated video paths (for multi-sample), seed used, and a
+  tail of recent logs
 
 **Resolution Configurations**:
+
 - `256px`: Lower resolution, faster generation (~2-3 min for 49 frames)
 - `768px`: Higher resolution, slower generation (~10-15 min for 49 frames)
 
-**Motion Score**: Controls motion intensity (1-10, default 4). Lower values produce calmer videos, higher values produce more dynamic motion.
+**Motion Score**: Controls motion intensity (1-5 or "dynamic", default 4). Lower values produce calmer videos, higher values produce more dynamic motion.
 
 ### 5. Job Manager (`app/job_manager.py`)
 
 **Purpose**: Manages the job queue and tracks job status
 
 **Key Classes**:
+
 - `JobStatus`: Enum for job states (queued, processing, completed, failed, cancelled)
 - `Job`: Dataclass storing job information
 - `JobManager`: Main class for queue management
@@ -123,7 +133,8 @@ This is a classic **producer-consumer pattern**:
 **Purpose**: Background worker that processes jobs from the queue
 
 **Architecture**:
-```
+
+```text
 Main Thread (FastAPI)          |  Background Thread (Worker)
 -------------------------------|--------------------------------
 Receive HTTP request           |
@@ -132,8 +143,8 @@ Add to queue                   |
 Return job_id immediately      |
                                |  ← Get job from queue
                                |  ← Generate video
-                               |  ← Upload to GCS
-                               |  ← Mark job complete
+                               |  ← Upload to GCS (all samples)
+                               |  ← Mark job complete with URIs/log tail
 ```
 
 ### 7. Main API (`app/main.py`)
@@ -141,6 +152,7 @@ Return job_id immediately      |
 **Purpose**: FastAPI application that handles HTTP requests
 
 **Key Endpoints**:
+
 - `GET /health`: Health check for Vertex AI
 - `POST /predict`: Vertex AI prediction endpoint
 - `POST /v1/generate`: Async job submission
@@ -154,7 +166,8 @@ Return job_id immediately      |
 
 ### Complete Request Lifecycle
 
-**Step 1: Client Submits Request**
+#### Step 1: Client Submits Request
+
 ```json
 POST /predict
 {
@@ -165,32 +178,39 @@ POST /predict
 }
 ```
 
-**Step 2: FastAPI Receives Request**
+#### Step 2: FastAPI Receives Request
+
 - Pydantic validates request
 - If invalid → return 400 error
 - If valid → continue to handler
 
-**Step 3: Job Submission**
+#### Step 3: Job Submission
+
 - Generate unique job_id
 - Create Job object with status=QUEUED
 - Add to queue
 - Return response immediately
 
-**Step 4: Worker Picks Up Job**
+#### Step 4: Worker Picks Up Job
+
 - Worker loop calls `get_next_job()`
 - Job status → PROCESSING
 - Video generation starts
 
-**Step 5: Video Generation**
+#### Step 5: Video Generation
+
 - Open-Sora model runs inference
 - Video saved locally
 
-**Step 6: Save and Upload**
-- Upload video to GCS
-- Delete local file
-- Mark job as COMPLETED
+#### Step 6: Save and Upload
 
-**Step 7: Client Polls Status**
+- Normalize per-job outputs under `/tmp/opensora_outputs/{job_id}`
+- Upload one or more videos to GCS
+- Delete local job directory
+- Mark job as COMPLETED with URIs and log tail
+
+#### Step 7: Client Polls Status
+
 ```json
 GET /v1/jobs/{job_id}
 
@@ -199,7 +219,11 @@ Response:
   "job_id": "20251202_143022_847_001",
   "status": "completed",
   "video_uri": "gs://my-videos/20251202_143022_847_001/20251202_143022_847_001.mp4",
-  "seed": 42
+  "video_uris": [
+    "gs://my-videos/20251202_143022_847_001/20251202_143022_847_001.mp4"
+  ],
+  "seed": 42,
+  "log_tail": ["...last log lines..."]
 }
 ```
 
@@ -207,7 +231,7 @@ Response:
 
 ## File Organization
 
-```
+```text
 open-sora-serving-gcp/service/
 │
 ├── Dockerfile                 # Container image definition

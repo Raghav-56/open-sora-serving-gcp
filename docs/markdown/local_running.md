@@ -46,6 +46,7 @@ curl http://localhost:8081/health
 ```
 
 Expected response:
+
 ```json
 {
   "status": "healthy",
@@ -72,11 +73,15 @@ curl -X POST http://localhost:8081/v1/generate \
 ```
 
 Response:
+
 ```json
 {
   "job_id": "20251202_143022_847_001",
   "status": "queued",
-  "expected_video_uri": "gs://your-output-bucket/20251202_143022_847_001/20251202_143022_847_001.mp4"
+  "expected_video_uris": [
+    "gs://your-output-bucket/20251202_143022_847_001/20251202_143022_847_001.mp4"
+  ],
+  "expected_gcs_prefix": "gs://your-output-bucket/20251202_143022_847_001/"
 }
 ```
 
@@ -87,6 +92,7 @@ curl http://localhost:8081/v1/jobs/20251202_143022_847_001
 ```
 
 Response (while processing):
+
 ```json
 {
   "job_id": "20251202_143022_847_001",
@@ -97,16 +103,21 @@ Response (while processing):
 ```
 
 Response (when completed):
+
 ```json
 {
   "job_id": "20251202_143022_847_001",
   "status": "completed",
   "video_uri": "gs://your-output-bucket/20251202_143022_847_001/20251202_143022_847_001.mp4",
+  "video_uris": [
+    "gs://your-output-bucket/20251202_143022_847_001/20251202_143022_847_001.mp4"
+  ],
   "seed": 42,
   "prompt": "A serene waterfall...",
   "resolution": "256px",
   "frames": 49,
-  "generation_time_seconds": 125.4
+  "generation_time_seconds": 125.4,
+  "log_tail": ["...last log lines..."]
 }
 ```
 
@@ -117,6 +128,7 @@ curl http://localhost:8081/v1/queue
 ```
 
 Response:
+
 ```json
 {
   "queue_size": 2,

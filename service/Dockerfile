@@ -3,6 +3,8 @@
 
 FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 # Environment configuration
 # System settings
 ENV PYTHONUNBUFFERED=1 \

@@ -7,12 +7,12 @@ import os
 import sys
 from pathlib import Path
 
-from loguru import logger
-
-from .gcs_io import download_directory
-
 # Add /app to Python path so imports work when run as script
 sys.path.insert(0, "/app")
+
+from loguru import logger
+
+from app.gcs_io import download_directory
 
 
 class WeightBootstrapper:
@@ -22,6 +22,8 @@ class WeightBootstrapper:
     Required checkpoint files:
     - Open_Sora_v2.safetensors (main model, ~42GB)
     - hunyuan_vae.safetensors (VAE model)
+    - flux1-dev.safetensors (Flux image model for t2i2v)
+    - flux1-dev-ae.safetensors (Flux AE for t2i2v)
     - google/t5-v1_1-xxl/ (T5 encoder)
     - openai/clip-vit-large-patch14/ (CLIP encoder)
     """
@@ -30,6 +32,13 @@ class WeightBootstrapper:
     CRITICAL_FILES = [
         "Open_Sora_v2.safetensors",
         "hunyuan_vae.safetensors",
+        "flux1-dev.safetensors",
+        "flux1-dev-ae.safetensors",
+    ]
+
+    CRITICAL_DIRS = [
+        "google/t5-v1_1-xxl",
+        "openai/clip-vit-large-patch14",
     ]
 
     def __init__(
@@ -63,15 +72,26 @@ class WeightBootstrapper:
         """
         logger.info("🔍 Checking for Open-Sora v2 weights locally...")
 
+        all_present = True
+
         for filename in self.CRITICAL_FILES:
             filepath = self.destination_dir / filename
             if not filepath.exists():
                 logger.info(f"   ❌ Missing: {filename}")
-                return False
+                all_present = False
+                continue
             size_gb = filepath.stat().st_size / 1e9
             logger.info(f"   ✅ Found: {filename} ({size_gb:.2f} GB)")
 
-        return True
+        for dirname in self.CRITICAL_DIRS:
+            dirpath = self.destination_dir / dirname
+            if not dirpath.exists():
+                logger.info(f"   ❌ Missing directory: {dirname}")
+                all_present = False
+                continue
+            logger.info(f"   ✅ Found directory: {dirname}")
+
+        return all_present
 
     def download_weights(self, skip_existing: bool = True) -> None:
         """
@@ -117,9 +137,16 @@ class WeightBootstrapper:
                 size_gb = filepath.stat().st_size / 1e9
                 logger.info(f"   ✅ {filename}: {size_gb:.2f} GB")
 
+        for dirname in self.CRITICAL_DIRS:
+            dirpath = self.destination_dir / dirname
+            if not dirpath.exists():
+                missing.append(dirname)
+            else:
+                logger.info(f"   ✅ {dirname} directory present")
+
         if missing:
             raise FileNotFoundError(
-                f"Missing Open-Sora v2 weights: {', '.join(missing)}"
+                "Missing Open-Sora v2 weights: " + ", ".join(missing)
             )
 
         logger.info("✅ Open-Sora v2 weight verification complete!")

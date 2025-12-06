@@ -12,8 +12,11 @@ import os
 import random
 import subprocess
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple, Union
 from dataclasses import dataclass
+from collections import deque
+import csv
+import tempfile
 
 import torch
 from loguru import logger
@@ -46,9 +49,15 @@ class OpenSoraRunner:
     This wrapper uses t2i2v mode for best quality results.
     """
     
-    RESOLUTION_CONFIGS = {
-        "256px": "configs/diffusion/inference/t2i2v_256px.py",
-        "768px": "configs/diffusion/inference/t2i2v_768px.py",
+    MODE_CONFIGS = {
+        "t2i2v": {
+            "256px": "configs/diffusion/inference/t2i2v_256px.py",
+            "768px": "configs/diffusion/inference/t2i2v_768px.py",
+        },
+        "t2v": {
+            "256px": "configs/diffusion/inference/256px.py",
+            "768px": "configs/diffusion/inference/768px.py",
+        },
     }
     
     VALID_ASPECT_RATIOS = ["16:9", "9:16", "1:1", "2.39:1"]
@@ -57,14 +66,18 @@ class OpenSoraRunner:
     DEFAULT_NUM_STEPS = 50
     DEFAULT_ASPECT_RATIO = "16:9"
     
-    def __init__(self, model_path: str):
+    def __init__(self, model_path: str, opensora_dir: Optional[str] = None):
         """Initialize Open-Sora runner with model checkpoint path."""
         self.model_path = Path(model_path)
-        self.opensora_dir = Path("/app")
+        # default to container mount but allow override for local development
+        self.opensora_dir = (
+            Path(opensora_dir) if opensora_dir else Path("/app")
+        )
         self.config = OpenSoraConfig()
         self.device = None
         self.num_gpus = 0
         self._ready = False
+        self.default_output_dir = Path("/tmp/opensora_outputs")
         
         self._setup_gpu()
         self._verify_installation()
@@ -82,7 +95,9 @@ class OpenSoraRunner:
                 logger.info(f"  GPU {i}: {name} ({memory:.1f} GB)")
         else:
             self.device = "cpu"
-            logger.warning("No GPU detected - inference will be extremely slow")
+            logger.warning(
+                "No GPU detected - inference will be extremely slow"
+            )
     
     def _verify_installation(self):
         """Verify Open-Sora installation and model weights."""
@@ -94,12 +109,16 @@ class OpenSoraRunner:
                 f"Open-Sora inference script not found at {inference_script}"
             )
         
-        for resolution, config_path in self.RESOLUTION_CONFIGS.items():
-            full_path = self.opensora_dir / config_path
-            if not full_path.exists():
-                raise FileNotFoundError(
-                    f"Config for {resolution} not found at {full_path}"
-                )
+        for mode, configs in self.MODE_CONFIGS.items():
+            for resolution, config_path in configs.items():
+                full_path = self.opensora_dir / config_path
+                if not full_path.exists():
+                    raise FileNotFoundError(
+                        (
+                            f"Config for {mode} {resolution} "
+                            f"not found at {full_path}"
+                        )
+                    )
         
         logger.info("Open-Sora code verified")
         self._verify_weights()
@@ -114,29 +133,39 @@ class OpenSoraRunner:
                 f"Model path not found: {self.model_path}. "
                 "Run bootstrap_weights.py first."
             )
-        
-        main_ckpt = self.model_path / "Open_Sora_v2.safetensors"
-        vae_ckpt = self.model_path / "hunyuan_vae.safetensors"
-        
+
+        required_paths = {
+            "Main checkpoint": self.model_path / "Open_Sora_v2.safetensors",
+            "VAE checkpoint": self.model_path / "hunyuan_vae.safetensors",
+            "Flux t2i2v checkpoint": self.model_path / "flux1-dev.safetensors",
+            "Flux AE": self.model_path / "flux1-dev-ae.safetensors",
+            "T5 encoder": self.model_path / "google" / "t5-v1_1-xxl",
+            "CLIP encoder": (
+                self.model_path / "openai" / "clip-vit-large-patch14"
+            ),
+        }
+
+        missing = []
         found = []
-        for ckpt in [main_ckpt, vae_ckpt]:
-            if ckpt.exists():
-                size_gb = ckpt.stat().st_size / 1e9
-                found.append(f"{ckpt.name} ({size_gb:.1f} GB)")
-        
-        t5_dir = self.model_path / "google" / "t5-v1_1-xxl"
-        clip_dir = self.model_path / "openai" / "clip-vit-large-patch14"
-        
-        if t5_dir.exists():
-            found.append("T5 encoder")
-        if clip_dir.exists():
-            found.append("CLIP encoder")
-        
+
+        for label, path in required_paths.items():
+            if path.is_file():
+                size_gb = path.stat().st_size / 1e9
+                found.append(f"{label} ({size_gb:.1f} GB)")
+            elif path.is_dir():
+                found.append(f"{label} directory")
+            else:
+                missing.append(f"{label}: {path}")
+
         if found:
             logger.info(f"Found: {', '.join(found)}")
-        
-        if not main_ckpt.exists():
-            raise FileNotFoundError("Main checkpoint not found")
+
+        if missing:
+            raise FileNotFoundError(
+                "Missing Open-Sora weights: "
+                + "; ".join(missing)
+                + ". Run bootstrap_weights.py to download."
+            )
     
     def generate(
         self,
@@ -146,8 +175,17 @@ class OpenSoraRunner:
         aspect_ratio: str = "16:9",
         seed: Optional[int] = None,
         num_steps: int = 50,
-        motion_score: int = 4,  # Default from Open-Sora config
-    ) -> Tuple[str, int]:
+        motion_score: Union[
+            int, str
+        ] = 4,  # Supports integers 1-5 or "dynamic"
+        mode: str = "t2i2v",
+        fps: int = 24,
+        num_samples: int = 1,
+        guidance: Optional[float] = None,
+        prompt_refine: bool = False,
+        save_dir: Optional[str] = None,
+        timeout_seconds: Optional[int] = None,
+    ) -> Tuple[List[str], int, List[str]]:
         """
         Generate video from text prompt using Open-Sora v2.
         
@@ -158,35 +196,107 @@ class OpenSoraRunner:
             aspect_ratio: "16:9", "9:16", "1:1", or "2.39:1"
             seed: Random seed for reproducibility
             num_steps: Diffusion steps (default 50)
-            motion_score: Motion intensity 1-5 (default 4)
+            motion_score: Motion intensity 1-5 or "dynamic" (default 4)
+            mode: "t2i2v" (default) or "t2v" (direct text-to-video)
+            fps: Frames per second when writing the video
+            num_samples: How many samples to produce per prompt (sequentially)
+            guidance: Guidance scale override
+            prompt_refine: Whether to enable built-in prompt refinement
+            save_dir: Output directory override
+            timeout_seconds: Override per-job timeout (seconds)
             
         Returns:
             Tuple of (video_path, seed_used)
         """
-        if resolution not in self.RESOLUTION_CONFIGS:
-            raise ValueError(f"Invalid resolution: {resolution}")
+        mode = mode.lower()
+        if mode not in self.MODE_CONFIGS:
+            raise ValueError(
+                f"Invalid mode: {mode}. Choose from {list(self.MODE_CONFIGS)}"
+            )
+
+        if resolution not in self.MODE_CONFIGS[mode]:
+            raise ValueError(
+                f"Invalid resolution {resolution} for mode {mode}"
+            )
         
         if aspect_ratio not in self.VALID_ASPECT_RATIOS:
             raise ValueError(f"Invalid aspect_ratio: {aspect_ratio}")
         
         if num_frames not in self.VALID_NUM_FRAMES:
-            closest = min(self.VALID_NUM_FRAMES, key=lambda x: abs(x - num_frames))
+            closest = min(
+                self.VALID_NUM_FRAMES,
+                key=lambda x: abs(x - num_frames),
+            )
             logger.warning(f"Adjusting frames {num_frames} -> {closest}")
             num_frames = closest
+
+        if isinstance(motion_score, str):
+            if motion_score != "dynamic":
+                raise ValueError("motion_score must be 1-5 or 'dynamic'")
+        else:
+            if not 1 <= int(motion_score) <= 5:
+                raise ValueError("motion_score must be between 1 and 5")
+
+        if num_samples < 1:
+            raise ValueError("num_samples must be >= 1")
         
         if seed is None:
             seed = random.randint(0, 2**31 - 1)
         
-        config_path = self.RESOLUTION_CONFIGS[resolution]
-        output_dir = Path("/tmp/opensora_outputs")
+        config_path = self.MODE_CONFIGS[mode][resolution]
+        output_dir = Path(save_dir) if save_dir else self.default_output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
+        log_dir = output_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "torchrun.log"
+
+        # Bounded tail buffer for returning last N lines to callers
+        log_tail: deque[str] = deque(maxlen=200)
         
         logger.info("Starting video generation:")
         logger.info(f"  Prompt: {prompt[:80]}...")
-        logger.info(f"  Resolution: {resolution}, Aspect: {aspect_ratio}")
-        logger.info(f"  Frames: {num_frames}, Steps: {num_steps}, Seed: {seed}")
+        logger.info(
+            "  Mode: %s, Resolution: %s, Aspect: %s, FPS: %s, Samples: %s",
+            mode,
+            resolution,
+            aspect_ratio,
+            fps,
+            num_samples,
+        )
+        logger.info(
+            "  Frames: %s, Steps: %s, Seed: %s, Motion: %s",
+            num_frames,
+            num_steps,
+            seed,
+            motion_score,
+        )
         
         nproc = max(1, self.num_gpus)
+
+        # If prompt contains cli-like tokens, route via temp CSV to avoid
+        # accidental parsing surprises. Otherwise pass directly.
+        prompt_arg: List[str] = []
+        temp_prompt_file = None
+        try:
+            if "--" in prompt:
+                temp_prompt_file = tempfile.NamedTemporaryFile(
+                    mode="w",
+                    suffix=".csv",
+                    delete=False,
+                    dir=str(output_dir),
+                    encoding="utf-8",
+                )
+                writer = csv.writer(temp_prompt_file)
+                writer.writerow(["text"])
+                writer.writerow([prompt])
+                temp_prompt_file.flush()
+                prompt_arg = ["--dataset.data-path", temp_prompt_file.name]
+            else:
+                prompt_arg = ["--prompt", prompt]
+        except Exception:
+            if temp_prompt_file is not None:
+                temp_prompt_file.close()
+            raise
         
         cmd = [
             "torchrun",
@@ -195,18 +305,47 @@ class OpenSoraRunner:
             "scripts/diffusion/inference.py",
             config_path,
             "--save-dir", str(output_dir),
-            "--prompt", prompt,
+            *prompt_arg,
             "--seed", str(seed),
             "--sampling_option.seed", str(seed),
             "--sampling_option.num_frames", str(num_frames),
             "--sampling_option.num_steps", str(num_steps),
             "--aspect_ratio", aspect_ratio,
             "--motion-score", str(motion_score),
+            "--fps_save", str(fps),
+            "--num_sample", str(num_samples),
         ]
+
+        if guidance is not None:
+            cmd.extend(["--guidance", str(guidance)])
+
+        if prompt_refine:
+            cmd.extend(["--prompt_refine", "True"])
+
+        # Explicitly point to weights to avoid relying on cwd
+        cmd.extend([
+            "--model.from_pretrained",
+            str(self.model_path / "Open_Sora_v2.safetensors"),
+            "--ae.from_pretrained",
+            str(self.model_path / "hunyuan_vae.safetensors"),
+            "--t5.from_pretrained",
+            str(self.model_path / "google" / "t5-v1_1-xxl"),
+            "--clip.from_pretrained",
+            str(self.model_path / "openai" / "clip-vit-large-patch14"),
+        ])
+
+        if mode == "t2i2v":
+            cmd.extend([
+                "--img_flux.from_pretrained",
+                str(self.model_path / "flux1-dev.safetensors"),
+                "--img_flux_ae.from_pretrained",
+                str(self.model_path / "flux1-dev-ae.safetensors"),
+            ])
         
         env = os.environ.copy()
         env["PYTHONPATH"] = str(self.opensora_dir)
         env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        effective_timeout = timeout_seconds or 1800
         
         try:
             process = subprocess.Popen(
@@ -217,36 +356,57 @@ class OpenSoraRunner:
                 cwd=str(self.opensora_dir),
                 env=env,
             )
-            
+
+            if process.stdout is None:
+                raise RuntimeError("Failed to capture inference output")
+
             output_lines = []
-            for line in process.stdout:
-                output_lines.append(line)
-            
-            process.wait(timeout=1800)
+            with open(log_path, "a", encoding="utf-8") as log_file:
+                for line in process.stdout:
+                    output_lines.append(line)
+                    log_tail.append(line.rstrip())
+                    log_file.write(line)
+                    log_file.flush()
+                    logger.debug(line.rstrip())
+
+            process.wait(timeout=effective_timeout)
             
             if process.returncode != 0:
                 error = "".join(output_lines[-20:])
-                logger.error(f"Generation failed: {error[:500]}")
-                raise RuntimeError(f"Generation failed: {error[:500]}")
+                logger.error(
+                    "Generation failed (return code %s)", process.returncode
+                )
+                logger.error(f"Stderr: {error}")
+                raise RuntimeError(f"Video generation failed: {error[-500:]}")
             
-            video_path = self._find_latest_video(output_dir)
-            if not video_path:
+            video_paths = self._find_videos(output_dir)
+            if not video_paths:
                 raise RuntimeError("No video file generated")
             
-            logger.info(f"Video generated: {video_path}")
-            return str(video_path), seed
+            logger.info(f"Video generated: {video_paths}")
+            return [str(p) for p in video_paths], seed, list(log_tail)
             
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             process.kill()
-            raise RuntimeError("Generation timed out (30 min)")
+            raise RuntimeError(
+                f"Generation timed out ({effective_timeout} sec)"
+            ) from exc
+        finally:
+            if temp_prompt_file is not None:
+                try:
+                    temp_prompt_file.close()
+                    Path(temp_prompt_file.name).unlink(missing_ok=True)
+                except Exception:
+                    pass
     
-    def _find_latest_video(self, output_dir: Path) -> Optional[Path]:
-        """Find the most recently created video file."""
-        video_files = []
+    def _find_videos(self, output_dir: Path) -> List[Path]:
+        """Collect generated videos sorted by mtime descending."""
+        video_files: List[Path] = []
         for ext in ["mp4", "avi", "mov", "webm"]:
             video_files.extend(output_dir.glob(f"**/*.{ext}"))
-        
-        return max(video_files, key=lambda p: p.stat().st_mtime) if video_files else None
+        return sorted(
+            video_files, key=lambda p: p.stat().st_mtime, reverse=True
+        )
 
     def is_ready(self) -> bool:
         """Check if runner is ready for inference."""
@@ -259,7 +419,8 @@ class OpenSoraRunner:
             "model_path": str(self.model_path),
             "ready": self._ready,
             "num_gpus": self.num_gpus,
-            "resolutions": list(self.RESOLUTION_CONFIGS.keys()),
+            "resolutions": list(next(iter(self.MODE_CONFIGS.values())).keys()),
+            "modes": list(self.MODE_CONFIGS.keys()),
             "aspect_ratios": self.VALID_ASPECT_RATIOS,
             "valid_frame_counts": self.VALID_NUM_FRAMES,
         }

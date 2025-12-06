@@ -6,7 +6,7 @@ Async video generation with job queueing and status tracking.
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union, cast, List
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -21,6 +21,7 @@ from app.worker import InferenceWorker
 VALID_RESOLUTIONS = ["256px", "768px"]
 VALID_NUM_FRAMES = [17, 33, 49, 65, 81, 97, 113, 129]  # 4k+1 format
 VALID_ASPECT_RATIOS = ["16:9", "9:16", "1:1", "2.39:1"]
+VALID_MODES = ["t2i2v", "t2v"]
 
 
 class VideoGenerationRequest(BaseModel):
@@ -35,12 +36,17 @@ class VideoGenerationRequest(BaseModel):
 
     resolution: str = Field(
         "256px",
-        description="Video resolution: '256px' (fast) or '768px' (high quality)",
+        description=(
+            "Video resolution: '256px' (fast) or '768px' (high quality)"
+        ),
     )
 
     num_frames: int = Field(
         49,
-        description="Number of frames (4k+1 format): 17, 33, 49, 65, 81, 97, 113, 129",
+        description=(
+            "Number of frames (4k+1 format): "
+            "17, 33, 49, 65, 81, 97, 113, 129"
+        ),
     )
 
     aspect_ratio: str = Field(
@@ -48,16 +54,43 @@ class VideoGenerationRequest(BaseModel):
         description="Video aspect ratio: '16:9', '9:16', '1:1', '2.39:1'",
     )
 
-    motion_score: Optional[int] = Field(
+    motion_score: Optional[Union[int, str]] = Field(
         None,
-        description="Motion intensity (4-6 recommended). None for default (4).",
-        ge=1,
-        le=10,
+        description="Motion intensity 1-5 or 'dynamic'. None for default (4).",
     )
 
     seed: Optional[int] = Field(
         None,
         description="Random seed for reproducibility (0-4294967295)",
+    )
+
+    mode: str = Field(
+        "t2i2v",
+        description="Generation mode: 't2i2v' (default) or 't2v'",
+    )
+
+    fps: int = Field(
+        24,
+        description="Output frames per second",
+        ge=1,
+        le=60,
+    )
+
+    num_samples: int = Field(
+        1,
+        description="Number of samples to generate",
+        ge=1,
+        le=4,
+    )
+
+    guidance: Optional[float] = Field(
+        None,
+        description="Guidance scale override; None uses config default",
+    )
+
+    prompt_refine: bool = Field(
+        False,
+        description="Enable built-in prompt refinement",
     )
 
     output_bucket: str = Field(
@@ -81,14 +114,25 @@ class VideoGenerationRequest(BaseModel):
     @classmethod
     def validate_num_frames(cls, v: int) -> int:
         if v not in VALID_NUM_FRAMES:
-            raise ValueError(f"num_frames must be one of {VALID_NUM_FRAMES} (4k+1)")
+            raise ValueError(
+                f"num_frames must be one of {VALID_NUM_FRAMES} (4k+1)"
+            )
         return v
 
     @field_validator("aspect_ratio")
     @classmethod
     def validate_aspect_ratio(cls, v: str) -> str:
         if v not in VALID_ASPECT_RATIOS:
-            raise ValueError(f"aspect_ratio must be one of {VALID_ASPECT_RATIOS}")
+            raise ValueError(
+                f"aspect_ratio must be one of {VALID_ASPECT_RATIOS}"
+            )
+        return v
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v: str) -> str:
+        if v not in VALID_MODES:
+            raise ValueError(f"mode must be one of {VALID_MODES}")
         return v
 
     @field_validator("seed")
@@ -105,15 +149,73 @@ class VideoGenerationRequest(BaseModel):
             raise ValueError("output_bucket must be a valid GCS bucket name")
         return v
 
+    @field_validator("motion_score")
+    @classmethod
+    def validate_motion_score(
+        cls, v: Optional[Union[int, str]]
+    ) -> Optional[Union[int, str]]:
+        if v is None:
+            return v
+        if isinstance(v, str):
+            if v != "dynamic":
+                raise ValueError("motion_score string must be 'dynamic'")
+            return v
+        if not 1 <= v <= 5:
+            raise ValueError("motion_score must be between 1 and 5")
+        return v
+
 
 class JobSubmissionResponse(BaseModel):
     """Response model for job submission."""
 
     job_id: str = Field(..., description="Unique job identifier")
     status: str = Field(..., description="Job status (queued)")
-    expected_video_uri: str = Field(
-        ..., description="Expected GCS URI when complete"
+    expected_video_uris: List[str] = Field(
+        ..., description="Expected GCS URIs when complete"
     )
+    expected_gcs_prefix: str = Field(
+        ..., description="GCS prefix where outputs will be written"
+    )
+
+
+class JobStatusResponse(BaseModel):
+    """Response model for job status queries."""
+
+    job_id: str
+    status: str
+    created_at: str
+    prompt: str
+    resolution: str
+    frames: int
+    aspect_ratio: str
+    motion_score: Optional[Union[int, str]]
+    seed: Optional[int]
+    mode: str
+    fps: int
+    num_samples: int
+    guidance: Optional[float]
+    prompt_refine: bool
+    output_bucket: str
+    output_prefix: str
+    video_uri: Optional[str] = None
+    video_uris: Optional[List[str]] = None
+    generation_time_seconds: Optional[float] = None
+    completed_at: Optional[str] = None
+    started_at: Optional[str] = None
+    error: Optional[str] = None
+    log_tail: Optional[List[str]] = None
+
+
+class QueueStatusResponse(BaseModel):
+    """Response model for queue status."""
+
+    queue_size: int
+    currently_processing: Optional[str]
+    queued_job_ids: List[str]
+    total_jobs: int
+    completed_jobs: int
+    failed_jobs: int
+    cancelled_jobs: int
 
 
 # Global instances (initialized at startup via lifespan)
@@ -127,7 +229,7 @@ async def lifespan(app: FastAPI):
     """
     Lifespan context manager for FastAPI application.
     
-    Handles startup (model loading, worker initialization) and 
+    Handles startup (model loading, worker initialization) and
     shutdown (graceful worker termination) lifecycle events.
     
     See: https://fastapi.tiangolo.com/advanced/events/
@@ -152,7 +254,9 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Server ready!")
         logger.info(f"   Device: {runner.device}")
         logger.info("   API version: 1.0.0")
-        logger.info("   Endpoints: /predict, /v1/generate, /v1/jobs, /v1/queue")
+        logger.info(
+            "   Endpoints: /predict, /v1/generate, /v1/jobs, /v1/queue"
+        )
         
     except Exception as e:
         logger.error(f"❌ Failed to initialize: {e}")
@@ -198,6 +302,11 @@ async def submit_video_generation(request: VideoGenerationRequest) -> dict:
     logger.info(f"  Frames: {request.num_frames}")
     logger.info(f"  Aspect Ratio: {request.aspect_ratio}")
     logger.info(f"  Motion Score: {request.motion_score}")
+    logger.info(f"  Mode: {request.mode}")
+    logger.info(f"  FPS: {request.fps}")
+    logger.info(f"  Num Samples: {request.num_samples}")
+    logger.info(f"  Guidance: {request.guidance}")
+    logger.info(f"  Prompt Refine: {request.prompt_refine}")
     logger.info(f"  Seed: {request.seed}")
     bucket_path = f"gs://{request.output_bucket}/{request.output_prefix}"
     logger.info(f"  Output: {bucket_path}")
@@ -208,22 +317,38 @@ async def submit_video_generation(request: VideoGenerationRequest) -> dict:
             resolution=request.resolution,
             num_frames=request.num_frames,
             aspect_ratio=request.aspect_ratio,
-            motion_score=request.motion_score,
+            motion_score=cast(
+                Optional[Union[int, str]], request.motion_score
+            ),
             seed=request.seed,
+            mode=request.mode,
+            fps=request.fps,
+            num_samples=request.num_samples,
+            guidance=request.guidance,
+            prompt_refine=request.prompt_refine,
             output_bucket=request.output_bucket,
             output_prefix=request.output_prefix,
         )
 
-        prefix = request.output_prefix.rstrip("/") + "/" if request.output_prefix else ""
-        expected_video_uri = f"gs://{request.output_bucket}/{prefix}{job_id}.mp4"
+        prefix = (
+            request.output_prefix.rstrip("/") + "/"
+            if request.output_prefix
+            else ""
+        )
+        gcs_prefix = f"gs://{request.output_bucket}/{prefix}{job_id}/"
+        expected_video_uris = [
+            f"{gcs_prefix}{job_id}{f'_{i+1}' if i else ''}.mp4"
+            for i in range(request.num_samples)
+        ]
 
         logger.info(f"✅ Job queued: {job_id}")
-        logger.info(f"   Expected URI: {expected_video_uri}")
+        logger.info(f"   Expected URIs: {expected_video_uris}")
 
         return {
             "job_id": job_id,
             "status": "queued",
-            "expected_video_uri": expected_video_uri,
+            "expected_video_uris": expected_video_uris,
+            "expected_gcs_prefix": gcs_prefix,
         }
 
     except Exception as e:
@@ -323,6 +448,7 @@ async def generate_v1(request: VideoGenerationRequest):
 
 @app.get(
     "/v1/jobs/{job_id}",
+    response_model=JobStatusResponse,
     status_code=status.HTTP_200_OK,
     summary="Get job status"
 )
@@ -354,7 +480,10 @@ async def get_job_status(job_id: str):
     if job is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": "job_not_found", "message": f"No job found with ID: {job_id}"}
+            detail={
+                "error": "job_not_found",
+                "message": f"No job found with ID: {job_id}",
+            }
         )
     
     return job.to_dict()
@@ -370,7 +499,8 @@ async def cancel_job(job_id: str):
     Cancel a video generation job.
     
     - Queued jobs: Removed from queue
-    - Processing jobs: Marked for cancellation (cannot stop mid-generation, but result won't be saved)
+        - Processing jobs: Marked for cancellation (cannot stop mid-generation,
+            but result will not be saved)
     - Completed/failed jobs: Cannot be cancelled
     
     Args:
@@ -398,6 +528,7 @@ async def cancel_job(job_id: str):
 
 @app.get(
     "/v1/queue",
+    response_model=QueueStatusResponse,
     status_code=status.HTTP_200_OK,
     summary="Get queue status"
 )

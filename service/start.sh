@@ -1,11 +1,19 @@
 #!/bin/bash
 # Open-Sora v2 API - Container Startup
 # Nannie AI - Proprietary System
-set -e
+set -euo pipefail
+IFS=$'\n\t'
 
 # uv sync creates .venv during docker build, we must use it
 export VIRTUAL_ENV=/app/.venv
 export PATH="$VIRTUAL_ENV/bin:$PATH"
+
+verify_cmd() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "ERROR: Required command '$1' not found on PATH";
+        exit 1;
+    }
+}
 
 # Verify we're using the correct Python
 if [ ! -f "$VIRTUAL_ENV/bin/python" ]; then
@@ -13,6 +21,8 @@ if [ ! -f "$VIRTUAL_ENV/bin/python" ]; then
     echo "This indicates a Docker build issue. Rebuild the image."
     exit 1
 fi
+verify_cmd uv
+verify_cmd python
 
 # Signal Handling for Graceful Shutdown
 cleanup() {

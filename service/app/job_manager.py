@@ -10,7 +10,7 @@ from datetime import datetime
 from enum import Enum
 from queue import Queue, Empty
 from threading import Lock
-from typing import Dict, Optional
+from typing import Dict, Optional, Union, List
 
 from loguru import logger
 
@@ -35,57 +35,82 @@ class Job:
     resolution: str
     num_frames: int
     aspect_ratio: str
-    motion_score: Optional[int]
+    motion_score: Optional[Union[int, str]]
     seed: Optional[int]
+    mode: str
+    fps: int
+    num_samples: int
+    guidance: Optional[float]
+    prompt_refine: bool
     output_bucket: str
     output_prefix: str
 
     # Results (populated after completion)
     video_uri: Optional[str] = None
+    video_uris: Optional[List[str]] = None
+    log_tail: Optional[List[str]] = None
     actual_seed: Optional[int] = None
     error: Optional[str] = None
 
     # Timestamps
-    created_at: float = field(default_factory=lambda: datetime.now().timestamp())
+    created_at: float = field(
+        default_factory=lambda: datetime.now().timestamp()
+    )
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
 
     def to_dict(self) -> dict:
         """Convert job to dictionary for API response."""
-        result = {
+        base = {
             "job_id": self.job_id,
             "status": self.status.value,
             "created_at": datetime.fromtimestamp(self.created_at).isoformat(),
+            "prompt": self.prompt,
+            "resolution": self.resolution,
+            "frames": self.num_frames,
+            "aspect_ratio": self.aspect_ratio,
+            "motion_score": self.motion_score,
+            "seed": self.seed,
+            "mode": self.mode,
+            "fps": self.fps,
+            "num_samples": self.num_samples,
+            "guidance": self.guidance,
+            "prompt_refine": self.prompt_refine,
+            "output_bucket": self.output_bucket,
+            "output_prefix": self.output_prefix,
         }
 
         if self.status == JobStatus.COMPLETED:
             gen_time = None
             if self.completed_at and self.started_at:
                 gen_time = round(self.completed_at - self.started_at, 2)
-            result.update({
+            base.update({
                 "video_uri": self.video_uri,
+                "video_uris": self.video_uris,
                 "seed": self.actual_seed,
-                "prompt": self.prompt,
-                "resolution": self.resolution,
-                "frames": self.num_frames,
-                "aspect_ratio": self.aspect_ratio,
                 "generation_time_seconds": gen_time,
                 "completed_at": (
                     datetime.fromtimestamp(self.completed_at).isoformat()
                     if self.completed_at
                     else None
                 ),
+                "log_tail": self.log_tail,
             })
         elif self.status == JobStatus.FAILED:
-            result["error"] = self.error
+            base["error"] = self.error
         elif self.status == JobStatus.PROCESSING:
-            result["started_at"] = (
+            base["started_at"] = (
                 datetime.fromtimestamp(self.started_at).isoformat()
                 if self.started_at
                 else None
             )
+        elif self.status == JobStatus.CANCELLED:
+            if self.completed_at:
+                base["completed_at"] = (
+                    datetime.fromtimestamp(self.completed_at).isoformat()
+                )
 
-        return result
+        return base
 
 
 class JobManager:
@@ -136,7 +161,8 @@ class JobManager:
         Returns:
             str: Unique job ID
         """
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # YYYYMMDD_HHMMSS_mmm
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        # YYYYMMDD_HHMMSS_mmm
         
         # Increment counter for this millisecond
         self.job_counters[timestamp] += 1
@@ -153,8 +179,13 @@ class JobManager:
         resolution: str,
         num_frames: int,
         aspect_ratio: str,
-        motion_score: Optional[int],
+        motion_score: Optional[Union[int, str]],
         seed: Optional[int],
+        mode: str,
+        fps: int,
+        num_samples: int,
+        guidance: Optional[float],
+        prompt_refine: bool,
         output_bucket: str,
         output_prefix: str,
     ) -> str:
@@ -185,6 +216,11 @@ class JobManager:
             aspect_ratio=aspect_ratio,
             motion_score=motion_score,
             seed=seed,
+            mode=mode,
+            fps=fps,
+            num_samples=num_samples,
+            guidance=guidance,
+            prompt_refine=prompt_refine,
             output_bucket=output_bucket,
             output_prefix=output_prefix,
         )
@@ -232,7 +268,11 @@ class JobManager:
 
             if job.status != JobStatus.QUEUED:
                 # This job was likely cancelled or already being processed
-                logger.debug(f"Skipping job in queue (status={job.status.value}): {job_id}")
+                logger.debug(
+                    "Skipping job in queue (status=%s): %s",
+                    job.status.value,
+                    job_id,
+                )
                 continue
 
             # Mark as processing and return
@@ -247,8 +287,9 @@ class JobManager:
     def complete_job(
         self,
         job_id: str,
-        video_uri: str,
-        actual_seed: int
+        video_uris: List[str],
+        actual_seed: int,
+        log_tail: Optional[List[str]] = None,
     ):
         """
         Mark job as completed.
@@ -263,10 +304,15 @@ class JobManager:
             return
 
         with self.lock:
-            # If the job was cancelled while processing, do not mark as completed and do not save results.
+            # If the job was cancelled while processing, do not mark as
+            # completed and do not save results.
             job = self.jobs[job_id]
             if job.status == JobStatus.CANCELLED:
-                logger.warning(f"⚠️ Completion called for cancelled job {job_id} - discarding results")
+                logger.warning(
+                    "Completion called for cancelled job %s - discarding"
+                    " results",
+                    job_id,
+                )
                 # ensure completed_at exists so retention/cleanup works
                 if not job.completed_at:
                     job.completed_at = datetime.now().timestamp()
@@ -275,15 +321,17 @@ class JobManager:
                 return
 
             job.status = JobStatus.COMPLETED
-            job.video_uri = video_uri
+            job.video_uri = video_uris[0] if video_uris else None
+            job.video_uris = video_uris
             job.actual_seed = actual_seed
+            job.log_tail = log_tail or []
             job.completed_at = datetime.now().timestamp()
 
             if self.current_job_id == job_id:
                 self.current_job_id = None
         
         logger.info(f"✅ Job completed: {job_id}")
-        logger.info(f"   Video: {video_uri}")
+        logger.info(f"   Videos: {video_uris}")
     
     def fail_job(self, job_id: str, error: str):
         """
@@ -298,9 +346,14 @@ class JobManager:
             return
 
         with self.lock:
-            # If the job was cancelled while processing, keep CANCELLED as final status.
+            # If the job was cancelled while processing, keep CANCELLED as
+            # final status.
             if self.jobs[job_id].status == JobStatus.CANCELLED:
-                logger.warning(f"⚠️ Failure reported for cancelled job {job_id} - keeping CANCELLED status")
+                logger.warning(
+                    "Failure reported for cancelled job %s - keeping"
+                    " CANCELLED status",
+                    job_id,
+                )
                 if not self.jobs[job_id].completed_at:
                     self.jobs[job_id].completed_at = datetime.now().timestamp()
                 if self.current_job_id == job_id:
@@ -349,12 +402,16 @@ class JobManager:
                 # still ongoing; the worker should respect the CANCELLED state.
                 job.status = JobStatus.CANCELLED
                 logger.warning(
-                    f"⚠️ Job marked for cancellation (currently processing): {job_id}"
+                    (
+                        "Job marked for cancellation (currently processing):"
+                        f" {job_id}"
+                    )
                 )
                 return {
                     "message": (
-                        "Job marked for cancellation. Video generation cannot be "
-                        "stopped mid-process, but result will not be saved."
+                        "Job marked for cancellation. Video generation cannot"
+                        " be stopped mid-process, but result will not be"
+                        " saved."
                     )
                 }
 
@@ -384,16 +441,29 @@ class JobManager:
             "currently_processing": self.current_job_id,
             "queued_job_ids": queued_jobs,
             "total_jobs": len(self.jobs),
-            "completed_jobs": sum(1 for job in self.jobs.values() if job.status == JobStatus.COMPLETED),
-            "failed_jobs": sum(1 for job in self.jobs.values() if job.status == JobStatus.FAILED),
-            "cancelled_jobs": sum(1 for job in self.jobs.values() if job.status == JobStatus.CANCELLED),
+            "completed_jobs": sum(
+                1 for job in self.jobs.values()
+                if job.status == JobStatus.COMPLETED
+            ),
+            "failed_jobs": sum(
+                1 for job in self.jobs.values()
+                if job.status == JobStatus.FAILED
+            ),
+            "cancelled_jobs": sum(
+                1 for job in self.jobs.values()
+                if job.status == JobStatus.CANCELLED
+            ),
         }
     
     def queue_size(self) -> int:
         """Get number of jobs in queue."""
-        # Return the count of jobs that are currently QUEUED (ignore cancelled ones still in the queue)
+        # Return count of jobs currently QUEUED (ignore cancelled ones still in
+        # the queue)
         with self.lock:
-            return sum(1 for job in self.jobs.values() if job.status == JobStatus.QUEUED)
+            return sum(
+                1 for job in self.jobs.values()
+                if job.status == JobStatus.QUEUED
+            )
     
     def is_busy(self) -> bool:
         """Check if currently processing a job."""
@@ -410,14 +480,21 @@ class JobManager:
         now = datetime.now().timestamp()
         to_remove = []
 
-        # Snapshot state under lock then operate on snapshot to avoid long lock holds
+        # Snapshot state under lock then operate on snapshot to avoid long
+        # lock holds
         with self.lock:
             jobs_snapshot = dict(self.jobs)
 
         # Find jobs older than retention period
         for job_id, job in jobs_snapshot.items():
-            if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
-                if job.completed_at and (now - job.completed_at) > self.job_retention_seconds:
+            if job.status in (
+                JobStatus.COMPLETED,
+                JobStatus.FAILED,
+                JobStatus.CANCELLED,
+            ):
+                if job.completed_at and (
+                    now - job.completed_at
+                ) > self.job_retention_seconds:
                     to_remove.append(job_id)
         
         # Also remove if we have too many completed jobs

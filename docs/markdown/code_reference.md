@@ -55,7 +55,7 @@ Submit a video generation job.
 | `resolution` | string | No | `"256px"` | `"256px"` or `"768px"` |
 | `num_frames` | int | No | `49` | 17, 33, 49, 65, 81, 97, 113, 129 (4k+1 format) |
 | `aspect_ratio` | string | No | `"16:9"` | `"16:9"`, `"9:16"`, `"1:1"`, `"2.39:1"` |
-| `motion_score` | int | No | `4` | 1-10 (4-6 recommended for natural motion) |
+| `motion_score` | int \| "dynamic" | No | `4` | 1-5 or "dynamic" (4-5 natural) |
 | `seed` | int | No | auto | 0 to 4294967295 |
 | `output_bucket` | string | Yes | - | GCS bucket name |
 | `output_prefix` | string | No | `""` | Path prefix in bucket |
@@ -66,7 +66,10 @@ Submit a video generation job.
 {
   "job_id": "20251205_143052_847_001",
   "status": "queued",
-  "expected_video_uri": "gs://my-output-bucket/videos/20251205_143052_847_001.mp4"
+  "expected_video_uris": [
+    "gs://my-output-bucket/videos/20251205_143052_847_001/20251205_143052_847_001.mp4"
+  ],
+  "expected_gcs_prefix": "gs://my-output-bucket/videos/20251205_143052_847_001/"
 }
 ```
 
@@ -105,13 +108,17 @@ Get status of a video generation job.
   "status": "completed",
   "created_at": "2025-12-05T14:30:52.847000",
   "video_uri": "gs://my-output-bucket/videos/20251205_143052_847_001/20251205_143052_847_001.mp4",
+  "video_uris": [
+    "gs://my-output-bucket/videos/20251205_143052_847_001/20251205_143052_847_001.mp4"
+  ],
   "seed": 42,
   "prompt": "A cat playing piano in a jazz club, cinematic lighting",
   "resolution": "256px",
   "frames": 49,
   "aspect_ratio": "16:9",
   "generation_time_seconds": 145.32,
-  "completed_at": "2025-12-05T14:33:18.167000"
+  "completed_at": "2025-12-05T14:33:18.167000",
+  "log_tail": ["...last log lines..."]
 }
 ```
 

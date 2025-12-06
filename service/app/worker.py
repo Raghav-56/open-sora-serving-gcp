@@ -41,8 +41,8 @@ class InferenceWorker:
         """
         self.runner = runner
         self.job_manager = job_manager
-        self.local_output_dir = Path("/tmp/opensora_outputs")
-        self.local_output_dir.mkdir(parents=True, exist_ok=True)
+        self.base_output_dir = Path("/tmp/opensora_outputs")
+        self.base_output_dir.mkdir(parents=True, exist_ok=True)
         
         # Configurable timeout
         self.generation_timeout = int(
@@ -54,7 +54,7 @@ class InferenceWorker:
 
         logger.info("🔧 InferenceWorker initialized")
         logger.info(f"   Timeout: {self.generation_timeout}s")
-        logger.info(f"   Local output: {self.local_output_dir}")
+        logger.info(f"   Local output base: {self.base_output_dir}")
 
         self._start_worker()
 
@@ -102,62 +102,102 @@ class InferenceWorker:
         logger.info(f"  Frames: {job.num_frames}")
         logger.info(f"  Aspect Ratio: {job.aspect_ratio}")
         logger.info(f"  Motion Score: {job.motion_score}")
+        logger.info(f"  Mode: {job.mode}")
+        logger.info(f"  FPS: {job.fps}")
+        logger.info(f"  Num Samples: {job.num_samples}")
 
         start_time = time.time()
+        job_output_dir = self.base_output_dir / job_id
+        job_output_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             logger.info("🎨 Generating video with Open-Sora v2...")
-            video_path, actual_seed = self.runner.generate(
+            video_paths, actual_seed, log_tail = self.runner.generate(
                 prompt=job.prompt,
                 resolution=job.resolution,
                 num_frames=job.num_frames,
                 aspect_ratio=job.aspect_ratio,
                 motion_score=job.motion_score,
                 seed=job.seed,
+                mode=job.mode,
+                fps=job.fps,
+                num_samples=job.num_samples,
+                guidance=job.guidance,
+                prompt_refine=job.prompt_refine,
+                save_dir=str(job_output_dir),
+                timeout_seconds=self.generation_timeout,
             )
 
             if job.status == JobStatus.CANCELLED:
                 logger.info(f"🚫 Job cancelled during generation: {job_id}")
+                self._cleanup_dir(job_output_dir)
                 return
 
             generation_time = time.time() - start_time
             logger.info(f"✅ Video generated in {generation_time:.1f}s")
 
-            # Save locally
-            filename = f"{job_id}.mp4"
-            local_path = self.local_output_dir / filename
-            shutil.copy2(video_path, str(local_path))
-
-            file_size_mb = local_path.stat().st_size / (1024 * 1024)
-            logger.info(f"💾 Saved: {local_path} ({file_size_mb:.1f} MB)")
+            # Normalize filenames and log sizes
+            normalized_paths = []
+            for idx, path in enumerate(video_paths):
+                src = Path(path)
+                suffix = f"_{idx+1}" if len(video_paths) > 1 else ""
+                normalized = job_output_dir / f"{job_id}{suffix}.mp4"
+                shutil.copy2(src, normalized)
+                file_size_mb = normalized.stat().st_size / (1024 * 1024)
+                logger.info(
+                    f"💾 Saved: {normalized} ({file_size_mb:.1f} MB)"
+                )
+                normalized_paths.append(normalized)
 
             # Upload to GCS
             logger.info("☁️  Uploading to GCS...")
-            prefix = job.output_prefix.rstrip("/") + "/" if job.output_prefix else ""
+            prefix = (
+                job.output_prefix.rstrip("/") + "/"
+                if job.output_prefix
+                else ""
+            )
             gcs_prefix = f"{prefix}{job_id}/"
 
-            video_uri = upload_video_to_gcs(
-                str(local_path),
-                job.output_bucket,
-                gcs_prefix,
-            )
+            if job.status == JobStatus.CANCELLED:
+                logger.info(f"🚫 Job cancelled before upload: {job_id}")
+                self._cleanup_dir(job_output_dir)
+                return
 
-            logger.info(f"✅ Uploaded: {video_uri}")
+            uploaded_uris = []
+            try:
+                for path in normalized_paths:
+                    uri = upload_video_to_gcs(
+                        str(path),
+                        job.output_bucket,
+                        gcs_prefix,
+                    )
+                    uploaded_uris.append(uri)
+                logger.info(f"✅ Uploaded: {uploaded_uris}")
+            except Exception as upload_exc:
+                logger.error(f"❌ Upload failed: {upload_exc}")
+                logger.exception(upload_exc)
+                self._cleanup_dir(job_output_dir)
+                raise
 
             # Cleanup
             try:
-                local_path.unlink()
-                logger.info("🗑️  Cleaned up local file")
+                self._cleanup_dir(job_output_dir)
+                logger.info("🗑️  Cleaned up job directory")
             except Exception as e:
                 logger.warning(f"⚠️  Failed to cleanup: {e}")
 
             # Mark completed
             elapsed_time = time.time() - start_time
-            self.job_manager.complete_job(job_id, video_uri, actual_seed)
+            self.job_manager.complete_job(
+                job_id,
+                uploaded_uris,
+                actual_seed,
+                log_tail,
+            )
 
             logger.info(f"✅ Job completed: {job_id}")
             logger.info(f"   Total time: {elapsed_time:.1f}s")
-            logger.info(f"   Video URI: {video_uri}")
+            logger.info(f"   Video URIs: {uploaded_uris}")
 
         except Exception as e:
             error_msg = str(e)
@@ -165,6 +205,9 @@ class InferenceWorker:
             logger.error(f"   Error: {error_msg}")
             logger.exception(e)
             self.job_manager.fail_job(job_id, error_msg)
+
+            # Ensure cleanup on failure
+            self._cleanup_dir(job_output_dir)
 
     def shutdown(self):
         """Graceful shutdown - wait for current job to complete."""
@@ -176,3 +219,11 @@ class InferenceWorker:
             self._worker_thread.join(timeout=60)
 
         logger.info("✅ Worker shutdown complete")
+
+    def _cleanup_dir(self, path: Path):
+        """Remove a job-specific directory if it exists."""
+        try:
+            if path.exists():
+                shutil.rmtree(path)
+        except Exception as exc:
+            logger.warning(f"⚠️ Cleanup failed for {path}: {exc}")
