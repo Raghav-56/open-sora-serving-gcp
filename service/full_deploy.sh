@@ -149,31 +149,28 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Step 2: Build Docker Image (Cloud Build) - SKIPPED (image already built)
+# Step 2: Build Docker Image (Cloud Build)
 # -----------------------------------------------------------------------------
 echo ""
 echo -e "${GREEN}[Step 2] Building Docker Image${NC}"
 echo "---------------------------------------------"
-echo -e "${YELLOW}  [SKIPPED] Image already exists: ${IMAGE_URI}${NC}"
+echo "  Using Cloud Build (this takes 15-20 minutes)..."
+echo "  Image: ${IMAGE_URI}"
+echo ""
 
-# Uncomment below to rebuild the image:
-# echo "  Using Cloud Build (this takes 15-20 minutes)..."
-# echo "  Image: ${IMAGE_URI}"
-# echo ""
-# 
-# gcloud builds submit \
-#     --region="$REGION" \
-#     --tag "$IMAGE_URI" \
-#     --timeout=3600s \
-#     --machine-type=e2-highcpu-32 \
-#     --project="$PROJECT_ID" \
-#     .
-# 
-# if [ $? -ne 0 ]; then
-#     echo -e "${RED}  [X] Build failed!${NC}"
-#     exit 1
-# fi
-# echo -e "${GREEN}  [OK] Image built and pushed${NC}"
+gcloud builds submit \
+    --region="$REGION" \
+    --tag "$IMAGE_URI" \
+    --timeout=3600s \
+    --machine-type=e2-highcpu-32 \
+    --project="$PROJECT_ID" \
+    .
+
+if [ $? -ne 0 ]; then
+    echo -e "${RED}  [X] Build failed!${NC}"
+    exit 1
+fi
+echo -e "${GREEN}  [OK] Image built and pushed${NC}"
 
 # -----------------------------------------------------------------------------
 # Step 3: Upload Model to Vertex AI

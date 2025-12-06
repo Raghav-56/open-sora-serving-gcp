@@ -96,9 +96,9 @@ RUN test -f /app/app/main.py && \
     test -f /app/app/gcs_io.py || \
     (echo "ERROR: Application code incomplete" && exit 1)
 
-# Copy startup script
+# Copy startup script and fix Windows line endings (CRLF -> LF)
 COPY start.sh /app/start.sh
-RUN chmod +x /app/start.sh
+RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
 
 # Create directories with appropriate permissions
 RUN mkdir -p /app/ckpts /tmp/opensora_outputs /app/samples && \
