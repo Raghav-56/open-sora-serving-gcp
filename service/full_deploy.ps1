@@ -2,7 +2,7 @@
 # Open-Sora Vertex AI Full Deployment Script
 # =============================================================================
 # This script handles the complete deployment of Open-Sora to Vertex AI
-# Run from the service/ directory
+# Run from the service/ directory using PowerShell
 # =============================================================================
 
 param(
@@ -50,18 +50,22 @@ Write-Host "[Step 0] Prerequisites Check" -ForegroundColor Green
 Write-Host "---------------------------------------------"
 
 # Check gcloud is installed and authenticated
+$account = $null
 try {
     $account = gcloud auth list --filter="status:ACTIVE" --format="value(account)" 2>$null
-    if ($account) {
-        Write-Host "  ✓ Authenticated as: $account" -ForegroundColor Green
-    } else {
-        Write-Host "  ✗ Not authenticated to gcloud" -ForegroundColor Red
-        Write-Host "  Run: gcloud auth login" -ForegroundColor Yellow
-        exit 1
-    }
-} catch {
-    Write-Host "  ✗ gcloud CLI not found" -ForegroundColor Red
+}
+catch {
+    Write-Host "  [X] gcloud CLI not found" -ForegroundColor Red
     Write-Host "  Install: https://cloud.google.com/sdk/docs/install" -ForegroundColor Yellow
+    exit 1
+}
+
+if ($account) {
+    Write-Host "  [OK] Authenticated as: $account" -ForegroundColor Green
+}
+else {
+    Write-Host "  [X] Not authenticated to gcloud" -ForegroundColor Red
+    Write-Host "  Run: gcloud auth login" -ForegroundColor Yellow
     exit 1
 }
 
@@ -88,9 +92,10 @@ if ($LASTEXITCODE -ne 0) {
         --location=$env:REGION `
         --description="Open-Sora v2 API" `
         --project=$env:PROJECT_ID
-    Write-Host "  ✓ Repository created" -ForegroundColor Green
-} else {
-    Write-Host "  ✓ Repository already exists" -ForegroundColor Green
+    Write-Host "  [OK] Repository created" -ForegroundColor Green
+}
+else {
+    Write-Host "  [OK] Repository already exists" -ForegroundColor Green
 }
 
 # -----------------------------------------------------------------------------
@@ -100,7 +105,7 @@ if (-not $SkipBuild) {
     Write-Host ""
     Write-Host "[Step 2] Building Docker Image" -ForegroundColor Green
     Write-Host "---------------------------------------------"
-    Write-Host "  Using Cloud Build (this takes ~15-20 minutes)..."
+    Write-Host "  Using Cloud Build (this takes 15-20 minutes)..."
     Write-Host "  Image: $env:IMAGE_URI"
     Write-Host ""
     
@@ -113,13 +118,14 @@ if (-not $SkipBuild) {
         .
     
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ✗ Build failed!" -ForegroundColor Red
+        Write-Host "  [X] Build failed!" -ForegroundColor Red
         exit 1
     }
-    Write-Host "  ✓ Image built and pushed" -ForegroundColor Green
-} else {
+    Write-Host "  [OK] Image built and pushed" -ForegroundColor Green
+}
+else {
     Write-Host ""
-    Write-Host "[Step 2] Skipping build (-SkipBuild flag set)" -ForegroundColor Yellow
+    Write-Host "[Step 2] Skipping build (SkipBuild flag set)" -ForegroundColor Yellow
 }
 
 # -----------------------------------------------------------------------------
@@ -137,19 +143,23 @@ if (-not $SkipUpload) {
         --format="value(name)" `
         --project=$env:PROJECT_ID 2>$null | Select-Object -First 1
     
+    $shouldUpload = $true
+    
     if ($existingModel) {
         Write-Host "  Model '$env:MODEL_NAME' already exists." -ForegroundColor Yellow
         $overwrite = Read-Host "  Delete and re-upload? (y/n)"
         if ($overwrite -eq 'y') {
             Write-Host "  Deleting existing model..."
             gcloud ai models delete $existingModel --region=$env:REGION --project=$env:PROJECT_ID --quiet
-        } else {
+        }
+        else {
             Write-Host "  Using existing model." -ForegroundColor Yellow
+            $shouldUpload = $false
         }
     }
     
     # Upload the model
-    if (-not $existingModel -or $overwrite -eq 'y') {
+    if ($shouldUpload) {
         Write-Host "  Uploading model..."
         gcloud ai models upload `
             --region=$env:REGION `
@@ -162,14 +172,15 @@ if (-not $SkipUpload) {
             --project=$env:PROJECT_ID
         
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "  ✗ Model upload failed!" -ForegroundColor Red
+            Write-Host "  [X] Model upload failed!" -ForegroundColor Red
             exit 1
         }
-        Write-Host "  ✓ Model uploaded" -ForegroundColor Green
+        Write-Host "  [OK] Model uploaded" -ForegroundColor Green
     }
-} else {
+}
+else {
     Write-Host ""
-    Write-Host "[Step 3] Skipping model upload (-SkipUpload flag set)" -ForegroundColor Yellow
+    Write-Host "[Step 3] Skipping model upload (SkipUpload flag set)" -ForegroundColor Yellow
 }
 
 # -----------------------------------------------------------------------------
@@ -187,9 +198,10 @@ if (-not $SkipEndpoint) {
         --project=$env:PROJECT_ID 2>$null | Select-Object -First 1
     
     if ($existingEndpoint) {
-        Write-Host "  ✓ Endpoint already exists" -ForegroundColor Green
+        Write-Host "  [OK] Endpoint already exists" -ForegroundColor Green
         $env:ENDPOINT_ID = ($existingEndpoint -split "/")[-1]
-    } else {
+    }
+    else {
         Write-Host "  Creating endpoint: $env:ENDPOINT_NAME..."
         gcloud ai endpoints create `
             --region=$env:REGION `
@@ -197,7 +209,7 @@ if (-not $SkipEndpoint) {
             --project=$env:PROJECT_ID
         
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "  ✗ Endpoint creation failed!" -ForegroundColor Red
+            Write-Host "  [X] Endpoint creation failed!" -ForegroundColor Red
             exit 1
         }
         
@@ -209,11 +221,12 @@ if (-not $SkipEndpoint) {
             --project=$env:PROJECT_ID | Select-Object -First 1
         $env:ENDPOINT_ID = ($env:ENDPOINT_ID -split "/")[-1]
         
-        Write-Host "  ✓ Endpoint created: $env:ENDPOINT_ID" -ForegroundColor Green
+        Write-Host "  [OK] Endpoint created: $env:ENDPOINT_ID" -ForegroundColor Green
     }
-} else {
+}
+else {
     Write-Host ""
-    Write-Host "[Step 4] Skipping endpoint creation (-SkipEndpoint flag set)" -ForegroundColor Yellow
+    Write-Host "[Step 4] Skipping endpoint creation (SkipEndpoint flag set)" -ForegroundColor Yellow
     
     # Still need to get endpoint ID
     $existingEndpoint = gcloud ai endpoints list `
@@ -248,7 +261,7 @@ if (-not $SkipDeploy) {
     Write-Host "    - GPU: $env:ACCELERATOR_TYPE"
     Write-Host "    - Replicas: 1"
     Write-Host ""
-    Write-Host "  This will take ~15-30 minutes..." -ForegroundColor Yellow
+    Write-Host "  This will take 15-30 minutes..." -ForegroundColor Yellow
     
     gcloud ai endpoints deploy-model $env:ENDPOINT_ID `
         --region=$env:REGION `
@@ -262,13 +275,14 @@ if (-not $SkipDeploy) {
         --project=$env:PROJECT_ID
     
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ✗ Deployment failed!" -ForegroundColor Red
+        Write-Host "  [X] Deployment failed!" -ForegroundColor Red
         exit 1
     }
-    Write-Host "  ✓ Model deployed successfully!" -ForegroundColor Green
-} else {
+    Write-Host "  [OK] Model deployed successfully!" -ForegroundColor Green
+}
+else {
     Write-Host ""
-    Write-Host "[Step 5] Skipping deployment (-SkipDeploy flag set)" -ForegroundColor Yellow
+    Write-Host "[Step 5] Skipping deployment (SkipDeploy flag set)" -ForegroundColor Yellow
 }
 
 # -----------------------------------------------------------------------------
@@ -282,16 +296,13 @@ Write-Host ""
 Write-Host "  Endpoint ID: $env:ENDPOINT_ID"
 Write-Host ""
 Write-Host "  API URL:" -ForegroundColor Yellow
-Write-Host "  https://$($env:REGION)-aiplatform.googleapis.com/v1/projects/$($env:PROJECT_ID)/locations/$($env:REGION)/endpoints/$($env:ENDPOINT_ID):rawPredict"
+$apiUrl = "https://$($env:REGION)-aiplatform.googleapis.com/v1/projects/$($env:PROJECT_ID)/locations/$($env:REGION)/endpoints/$($env:ENDPOINT_ID):rawPredict"
+Write-Host "  $apiUrl"
 Write-Host ""
-Write-Host "  Test with:" -ForegroundColor Yellow
-Write-Host '  $token = gcloud auth print-access-token'
-Write-Host '  curl -X POST "https://'"$($env:REGION)"'-aiplatform.googleapis.com/v1/projects/'"$($env:PROJECT_ID)"'/locations/'"$($env:REGION)"'/endpoints/'"$($env:ENDPOINT_ID)"':rawPredict" \'
-Write-Host '    -H "Authorization: Bearer $token" \'
-Write-Host '    -H "Content-Type: application/json" \'
-Write-Host '    -d ''{"prompt": "A cat playing piano", "resolution": "256px", "num_frames": 49}'''
+Write-Host "  Test command:" -ForegroundColor Yellow
+Write-Host "  gcloud auth print-access-token | Set-Variable token"
+Write-Host "  Invoke-RestMethod -Uri '$apiUrl' -Method POST -Headers @{Authorization='Bearer ' + `$token} -ContentType 'application/json' -Body '{`"prompt`":`"A cat playing piano`",`"resolution`":`"256px`",`"num_frames`":49}'"
 Write-Host ""
 Write-Host "  Monitor logs:" -ForegroundColor Yellow
 Write-Host "  gcloud logging read 'resource.type=aiplatform.googleapis.com/Endpoint AND resource.labels.endpoint_id=$($env:ENDPOINT_ID)' --limit=50"
 Write-Host ""
-
