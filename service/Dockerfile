@@ -10,14 +10,23 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC \
-    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    # PyTorch cuda allocator config
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512 \
     HF_HOME=/root/.cache/huggingface \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     # API Server (override via docker run -e or deployment config)
     PORT=8080 \
-    # Model weights configuration (REQUIRED: set WEIGHT_BUCKET at runtime)
-    WEIGHT_BUCKET="" \
+    # Optional: enable continuous GPU monitoring logs inside container.
+    # Set ENABLE_GPU_LOGGING=1 to start a background nvidia-smi logger.
+    ENABLE_GPU_LOGGING=0 \
+    # NCCL settings (for reliability and debugging of collectives)
+    NCCL_DEBUG=INFO \
+    NCCL_TIMEOUT=1800 \
+    # ColossalAI setting: lazy initialization can avoid some initialization-time allocations
+    COLOSSALAI_LAZY_INIT=1 \
+    # Model weights configuration
+    WEIGHT_BUCKET="nannie-opensora-weights-so" \
     MODEL_PATH=/app/ckpts \
     WEIGHT_PREFIX=ckpts/ \
     FORCE_DOWNLOAD=false \
@@ -79,10 +88,11 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 # Install flash-attention (optional, requires build)
 # Using --no-build-isolation to use existing CUDA environment
-RUN uv add --no-build-isolation flash-attn || echo "Flash attention build skipped (optional)"
+# NOTE: commented out for now to reduce possible OOM/segfault issues
+# RUN uv add --no-build-isolation flash-attn || echo "Flash attention build skipped (optional)"
 
 # Install tensornvme for high-performance IO (optional)
-RUN uv add git+https://github.com/hpcaitech/tensornvme.git || echo "TensorNVMe build skipped (optional)"
+# RUN uv add git+https://github.com/hpcaitech/tensornvme.git || echo "TensorNVMe build skipped (optional)"
 
 # Install API service dependencies using native uv add
 RUN uv add \

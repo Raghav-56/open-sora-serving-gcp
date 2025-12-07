@@ -3,7 +3,10 @@ Command builder for Open-Sora torchrun inference.
 """
 
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Tuple
+import tempfile
+import csv
+import os
 
 
 class CommandBuilder:
@@ -98,3 +101,82 @@ class CommandBuilder:
             ])
         
         return cmd
+
+    @staticmethod
+    def prepare_prompt_arg(
+        prompt: str, output_dir: Path
+    ) -> Tuple[List[str], Optional[str]]:
+        """
+        If prompt contains CLI-style tokens that could confuse parsing
+        we write it to a temporary CSV file and return an arg to point the
+        CLI at that file. Returns (prompt_arg_list, temp_file_path or None).
+        The caller is responsible for removing the temp file if provided.
+        """
+        if "--" in prompt:
+            # Use a temporary file inside output_dir so it's easy for callers to locate
+            fd, path = tempfile.mkstemp(suffix=".csv", dir=str(output_dir), text=True)
+            os.close(fd)
+            with open(path, "w", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["text"])
+                writer.writerow([prompt])
+            return ["--dataset.data-path", path], path
+        return ["--prompt", prompt], None
+
+    @staticmethod
+    def normalize_command_for_single_gpu(
+        cmd: List[str], nproc: int
+    ) -> List[str]:
+        """
+        If the command uses torchrun and there's only a single GPU process,
+        convert it into a direct python invocation for a simpler single-process run.
+        """
+        if nproc != 1 or not cmd or cmd[0] != "torchrun":
+            return cmd
+
+        filtered = []
+        i = 0
+        while i < len(cmd):
+            if cmd[i] == "torchrun":
+                i += 1
+                continue
+            if cmd[i] in ("--nproc_per_node",):
+                i += 2
+                continue
+            if cmd[i] == "--standalone":
+                i += 1
+                continue
+            filtered.append(cmd[i])
+            i += 1
+        if filtered and filtered[0].endswith(".py"):
+            filtered = ["python"] + filtered
+        return filtered
+
+    @staticmethod
+    def build_runtime_env(
+        opensora_dir: Path, nproc: int, base_env: Optional[dict] = None
+    ) -> dict:
+        """
+        Build a suitable environment dict for running the inference command.
+        """
+        env = dict(base_env) if base_env else os.environ.copy()
+        env["PYTHONPATH"] = str(opensora_dir)
+        env["PYTORCH_CUDA_ALLOC_CONF"] = (
+            "expandable_segments:True,max_split_size_mb:512"
+        )
+
+        if nproc == 1:
+            env.setdefault("CUDA_VISIBLE_DEVICES", "0")
+            env.setdefault("MASTER_ADDR", "localhost")
+            env.setdefault("MASTER_PORT", "29500")
+            env.setdefault("RANK", "0")
+            env.setdefault("LOCAL_RANK", "0")
+            env.setdefault("NCCL_DEBUG", "WARN")
+            env.setdefault("NCCL_TIMEOUT", "1800")
+            env.setdefault("TORCH_NCCL_BLOCKING_WAIT", "0")
+            env.setdefault("COLOSSALAI_LAZY_INIT", "1")
+        else:
+            env.setdefault("WORLD_SIZE", str(nproc))
+            env.setdefault("MASTER_ADDR", env.get("MASTER_ADDR", "localhost"))
+            env.setdefault("MASTER_PORT", env.get("MASTER_PORT", "29500"))
+        return env

@@ -33,6 +33,10 @@ cleanup() {
         kill -TERM "$UVICORN_PID" 2>/dev/null || true
         wait "$UVICORN_PID" 2>/dev/null || true
     fi
+    # Kill the GPU monitor if it was started
+    if [ -n "${NVIDIA_SMI_LOG_PID:-}" ]; then
+        kill -TERM "${NVIDIA_SMI_LOG_PID}" 2>/dev/null || true
+    fi
     exit 0
 }
 trap cleanup SIGTERM SIGINT SIGQUIT
@@ -43,6 +47,17 @@ echo ""
 
 export PYTHONUNBUFFERED=1
 cd /app
+
+# Provide runtime defaults for distributed environment variables only if not provided
+# These are intentionally set here rather than in the image so orchestration can override them.
+export MASTER_ADDR=${MASTER_ADDR:-localhost}
+export MASTER_PORT=${MASTER_PORT:-29500}
+# WORLD_SIZE: intentionally not defaulted here for single-GPU runs.
+if [ -n "${WORLD_SIZE:-}" ]; then
+    export WORLD_SIZE=${WORLD_SIZE}
+fi
+export RANK=${RANK:-0}
+export LOCAL_RANK=${LOCAL_RANK:-0}
 
 
 # Step 1: Environment Validation
@@ -57,6 +72,12 @@ echo ""
 echo "  Server Settings:"
 echo "    PORT                 : ${PORT:-8080}"
 echo "    GENERATION_TIMEOUT   : ${GENERATION_TIMEOUT:-1800}s"
+echo "  Distributed:"
+echo "    MASTER_ADDR          : ${MASTER_ADDR}"
+echo "    MASTER_PORT          : ${MASTER_PORT}"
+echo "    WORLD_SIZE           : ${WORLD_SIZE:-<NOT SET>}"
+echo "    RANK                 : ${RANK}"
+echo "    LOCAL_RANK           : ${LOCAL_RANK}"
 echo ""
 echo "  Job Manager:"
 echo "    JOB_RETENTION_SECONDS: ${JOB_RETENTION_SECONDS:-3600}s"
@@ -105,6 +126,27 @@ else
     echo "  WARNING: nvidia-smi not found. GPU may not be available."
 fi
 echo ""
+
+# Print more GPU & CUDA details for debug/compatibility checks
+if command -v nvidia-smi &> /dev/null; then
+    echo "  Full GPU query:"
+    nvidia-smi -L || true
+    echo "  GPU driver and processes:"
+    nvidia-smi --query-gpu=driver_version,cuda_version --format=csv,noheader || true
+fi
+if command -v nvcc &> /dev/null; then
+    echo "  nvcc: $(nvcc --version | tail -n+1 | sed -n '1p')"
+else
+    echo "  nvcc: not present"
+fi
+echo "  torch & cuda: $(uv run python -c 'import torch; print(torch.__version__, getattr(torch.version, "cuda", None), torch.cuda.is_available(), torch.cuda.device_count())' 2>/dev/null || echo 'torch-info-failed')"
+
+# Optional: continuous GPU logging using nvidia-smi loop (ENABLE_GPU_LOGGING=1 to enable)
+if [ "${ENABLE_GPU_LOGGING:-0}" = "1" ] && command -v nvidia-smi &> /dev/null; then
+    echo "  Starting GPU monitor logging to /tmp/nvidia-smi.log (CTRL+C to stop container)"
+    (while true; do date --iso-8601=seconds; nvidia-smi --query-gpu=index,name,memory.total,memory.used,memory.free --format=csv -l 1 --filename=- -i 0 2>/dev/null | sed -n '1,5p'; sleep 4; done) > /tmp/nvidia-smi.log 2>&1 &
+    export NVIDIA_SMI_LOG_PID=$!
+fi
 
 # Step 3: Weight Bootstrap
 echo "[3/4] Downloading Open-Sora v2 weights from GCS..."

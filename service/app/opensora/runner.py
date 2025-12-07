@@ -11,29 +11,24 @@ Open-Sora v2 Reference:
 import os
 import random
 import subprocess
-import tempfile
-import csv
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
-from collections import deque
 
-import torch
 from loguru import logger
+import torch
 
 from app.opensora.config import (
     OpenSoraConfig,
     MODE_CONFIGS,
     VALID_ASPECT_RATIOS,
     VALID_NUM_FRAMES,
-    DEFAULT_NUM_FRAMES,
-    DEFAULT_NUM_STEPS,
-    DEFAULT_MOTION_SCORE_ENV,
-    DEFAULT_NUM_STEPS_ENV,
-    DEFAULT_GUIDANCE_ENV,
-    DEFAULT_FPS_ENV,
-    DEFAULT_TIMEOUT_SECONDS_ENV,
+    resolve_runtime_defaults,
 )
 from app.opensora.command_builder import CommandBuilder
+from app.opensora.gpu import detect_gpus
+from app.opensora.verifier import verify_installation, verify_weights
+from app.opensora.process_runner import run_process_and_tail_logs
+from app.opensora.outputs import find_videos
 
 
 class OpenSoraRunner:
@@ -61,93 +56,13 @@ class OpenSoraRunner:
         self._ready = False
         self.default_output_dir = Path("/tmp/opensora_outputs")
         
-        self._setup_gpu()
-        self._verify_installation()
-    
-    def _setup_gpu(self):
-        """Detect and configure GPU."""
-        if torch.cuda.is_available():
-            self.num_gpus = torch.cuda.device_count()
-            self.device = "cuda"
-            
-            logger.info("GPU Configuration:")
-            for i in range(self.num_gpus):
-                name = torch.cuda.get_device_name(i)
-                memory = torch.cuda.get_device_properties(i).total_memory / 1e9
-                logger.info(f"  GPU {i}: {name} ({memory:.1f} GB)")
-        else:
-            self.device = "cpu"
-            logger.warning(
-                "No GPU detected - inference will be extremely slow"
-            )
-    
-    def _verify_installation(self):
-        """Verify Open-Sora installation and model weights."""
-        logger.info("Verifying Open-Sora installation...")
-        
-        inference_script = self.opensora_dir / "scripts/diffusion/inference.py"
-        if not inference_script.exists():
-            raise FileNotFoundError(
-                f"Open-Sora inference script not found at {inference_script}"
-            )
-        
-        for mode, configs in MODE_CONFIGS.items():
-            for resolution, config_path in configs.items():
-                full_path = self.opensora_dir / config_path
-                if not full_path.exists():
-                    raise FileNotFoundError(
-                        (
-                            f"Config for {mode} {resolution} "
-                            f"not found at {full_path}"
-                        )
-                    )
-        
-        logger.info("Open-Sora code verified")
-        self._verify_weights()
+        # GPU detection
+        self.device, self.num_gpus = detect_gpus()
+        # Verify installation and model weights
+        verify_installation(self.opensora_dir)
+        verify_weights(self.model_path)
         self._ready = True
     
-    def _verify_weights(self):
-        """Verify model checkpoint files exist."""
-        logger.info(f"Verifying weights at: {self.model_path}")
-        
-        if not self.model_path.exists():
-            raise FileNotFoundError(
-                f"Model path not found: {self.model_path}. "
-                "Run bootstrap_weights.py first."
-            )
-
-        required_paths = {
-            "Main checkpoint": self.model_path / "Open_Sora_v2.safetensors",
-            "VAE checkpoint": self.model_path / "hunyuan_vae.safetensors",
-            "Flux t2i2v checkpoint": self.model_path / "flux1-dev.safetensors",
-            "Flux AE": self.model_path / "flux1-dev-ae.safetensors",
-            "T5 encoder": self.model_path / "google" / "t5-v1_1-xxl",
-            "CLIP encoder": (
-                self.model_path / "openai" / "clip-vit-large-patch14"
-            ),
-        }
-
-        missing = []
-        found = []
-
-        for label, path in required_paths.items():
-            if path.is_file():
-                size_gb = path.stat().st_size / 1e9
-                found.append(f"{label} ({size_gb:.1f} GB)")
-            elif path.is_dir():
-                found.append(f"{label} directory")
-            else:
-                missing.append(f"{label}: {path}")
-
-        if found:
-            logger.info(f"Found: {', '.join(found)}")
-
-        if missing:
-            raise FileNotFoundError(
-                "Missing Open-Sora weights: "
-                + "; ".join(missing)
-                + ". Run bootstrap_weights.py to download."
-            )
     
     def generate(
         self,
@@ -210,30 +125,14 @@ class OpenSoraRunner:
             logger.warning(f"Adjusting frames {num_frames} -> {closest}")
             num_frames = closest
 
-        # Resolve defaults from env for commonly tweaked knobs
-        resolved_motion_default = DEFAULT_MOTION_SCORE_ENV
-        resolved_num_steps = (
-            int(DEFAULT_NUM_STEPS_ENV)
-            if DEFAULT_NUM_STEPS_ENV and DEFAULT_NUM_STEPS_ENV.isdigit()
-            else DEFAULT_NUM_STEPS
-        )
-        resolved_fps = (
-            int(DEFAULT_FPS_ENV)
-            if DEFAULT_FPS_ENV and DEFAULT_FPS_ENV.isdigit()
-            else self.config.default_fps
-        )
-        resolved_timeout = None
-        if (
-            DEFAULT_TIMEOUT_SECONDS_ENV
-            and DEFAULT_TIMEOUT_SECONDS_ENV.isdigit()
-        ):
-            resolved_timeout = int(DEFAULT_TIMEOUT_SECONDS_ENV)
-
-        if guidance is None and DEFAULT_GUIDANCE_ENV is not None:
-            try:
-                guidance = float(DEFAULT_GUIDANCE_ENV)
-            except ValueError:
-                logger.warning("Invalid DEFAULT_GUIDANCE; ignoring")
+        # Resolve defaults from environment and config
+        defaults = resolve_runtime_defaults(self.config)
+        resolved_motion_default = defaults["motion_default"]
+        resolved_num_steps = defaults["num_steps"]
+        resolved_fps = defaults["fps"]
+        resolved_timeout = defaults["timeout_seconds"]
+        if guidance is None:
+            guidance = defaults.get("guidance")
 
         if motion_score is None:
             if resolved_motion_default == "dynamic":
@@ -271,8 +170,6 @@ class OpenSoraRunner:
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / "torchrun.log"
 
-        # Bounded tail buffer for returning last N lines to callers
-        log_tail: deque[str] = deque(maxlen=200)
         
         logger.info("Starting video generation:")
         logger.info(f"  Prompt: {prompt[:80]}...")
@@ -291,33 +188,22 @@ class OpenSoraRunner:
             seed,
             motion_score,
         )
-        
-        nproc = max(1, self.num_gpus)
 
-        # If prompt contains cli-like tokens, route via temp CSV to avoid
-        # accidental parsing surprises. Otherwise pass directly.
+        nproc = self.num_gpus if self.num_gpus > 0 else 1
+        if nproc != 1 and self.num_gpus == 1:
+            logger.warning(
+                "Detected 1 GPU but computed nproc=%s; forcing nproc=1",
+                nproc,
+            )
+            nproc = 1
+
+        # If prompt contains CLI-like tokens, write it to a temporary CSV
+        # inside the output dir and return an explicit dataset argument.
         prompt_arg: List[str] = []
         temp_prompt_file = None
-        try:
-            if "--" in prompt:
-                temp_prompt_file = tempfile.NamedTemporaryFile(
-                    mode="w",
-                    suffix=".csv",
-                    delete=False,
-                    dir=str(output_dir),
-                    encoding="utf-8",
-                )
-                writer = csv.writer(temp_prompt_file)
-                writer.writerow(["text"])
-                writer.writerow([prompt])
-                temp_prompt_file.flush()
-                prompt_arg = ["--dataset.data-path", temp_prompt_file.name]
-            else:
-                prompt_arg = ["--prompt", prompt]
-        except Exception:
-            if temp_prompt_file is not None:
-                temp_prompt_file.close()
-            raise
+        prompt_arg, temp_prompt_file = CommandBuilder.prepare_prompt_arg(
+            prompt, output_dir
+        )
         
         # Build command using CommandBuilder
         cmd = CommandBuilder.build_inference_command(
@@ -337,72 +223,54 @@ class OpenSoraRunner:
             mode=mode,
             nproc=nproc,
         )
+
+        # Normalize the command for single-process runs.
+        cmd = CommandBuilder.normalize_command_for_single_gpu(cmd, nproc)
         
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(self.opensora_dir)
-        env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        runner_mode = "torchrun"
+        if cmd[0] == "python":
+            runner_mode = "python"
+        logger.info("nproc computed: %s, using %s", nproc, runner_mode)
+        short_cmd = " ".join(cmd[:10]) + (" ..." if len(cmd) > 10 else "")
+        logger.debug("short execution command: %s", short_cmd)
+        # Build the runtime environment from command builder helper
+        env = CommandBuilder.build_runtime_env(self.opensora_dir, nproc, os.environ.copy())
         
         try:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                cwd=str(self.opensora_dir),
+            returncode, output_lines, tail_lines = run_process_and_tail_logs(
+                cmd=cmd,
+                cwd=self.opensora_dir,
                 env=env,
+                log_path=log_path,
+                timeout_seconds=effective_timeout,
             )
 
-            if process.stdout is None:
-                raise RuntimeError("Failed to capture inference output")
-
-            output_lines = []
-            with open(log_path, "a", encoding="utf-8") as log_file:
-                for line in process.stdout:
-                    output_lines.append(line)
-                    log_tail.append(line.rstrip())
-                    log_file.write(line)
-                    log_file.flush()
-                    logger.debug(line.rstrip())
-
-            process.wait(timeout=effective_timeout)
-            
-            if process.returncode != 0:
+            if returncode != 0:
                 error = "".join(output_lines[-20:])
                 logger.error(
-                    "Generation failed (return code %s)", process.returncode
+                    "Generation failed (return code %s)", returncode
                 )
                 logger.error(f"Stderr: {error}")
                 raise RuntimeError(f"Video generation failed: {error[-500:]}")
-            
-            video_paths = self._find_videos(output_dir)
+
+            video_paths = find_videos(output_dir)
             if not video_paths:
                 raise RuntimeError("No video file generated")
-            
+
             logger.info(f"Video generated: {video_paths}")
-            return [str(p) for p in video_paths], seed, list(log_tail)
-            
+            return [str(p) for p in video_paths], seed, tail_lines
+
         except subprocess.TimeoutExpired as exc:
-            process.kill()
             raise RuntimeError(
                 f"Generation timed out ({effective_timeout} sec)"
             ) from exc
         finally:
             if temp_prompt_file is not None:
                 try:
-                    temp_prompt_file.close()
-                    Path(temp_prompt_file.name).unlink(missing_ok=True)
+                    Path(temp_prompt_file).unlink(missing_ok=True)
                 except Exception:
                     pass
     
-    def _find_videos(self, output_dir: Path) -> List[Path]:
-        """Collect generated videos sorted by mtime descending."""
-        video_files: List[Path] = []
-        for ext in ["mp4", "avi", "mov", "webm"]:
-            video_files.extend(output_dir.glob(f"**/*.{ext}"))
-        
-        # Sort by modification time (newest first)
-        video_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        return video_files
     
     def is_ready(self) -> bool:
         """Check if runner is ready for inference."""

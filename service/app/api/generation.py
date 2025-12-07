@@ -4,7 +4,7 @@ Video generation endpoints for Open-Sora API.
 
 from typing import Optional, Union, cast
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Request
 from loguru import logger
 
 from app.models.requests import VideoGenerationRequest
@@ -113,20 +113,53 @@ async def submit_video_generation(request: VideoGenerationRequest) -> dict:
     status_code=status.HTTP_200_OK,
     summary="Vertex AI prediction endpoint"
 )
-async def predict(request: VideoGenerationRequest):
+async def predict(request: Request):
     """
     Vertex AI prediction endpoint (required by Vertex AI deployment).
+    Handles both Vertex AI's instances format and direct requests.
     
     Returns job_id immediately. Video generates in background.
     Poll /v1/jobs/{job_id} to check status and get video URI when complete.
     
     Args:
-        request: VideoGenerationRequest with prompt and parameters
+        request: Raw request (can be instances format or direct)
         
     Returns:
         JobSubmissionResponse with job_id and expected_video_uris
     """
-    return await submit_video_generation(request)
+    try:
+        body = await request.json()
+        
+        # Check if this is Vertex AI's instances format
+        if isinstance(body, dict) and "instances" in body:
+            logger.info("📦 Received Vertex AI instances format")
+            instances = body["instances"]
+            if not instances or len(instances) == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="instances array is empty"
+                )
+            # Use the first instance
+            video_request = VideoGenerationRequest(**instances[0])
+        else:
+            # Direct format (for rawPredict or direct API calls)
+            logger.info("📦 Received direct request format")
+            video_request = VideoGenerationRequest(**body)
+        
+        return await submit_video_generation(video_request)
+        
+    except ValueError as e:
+        logger.error(f"❌ Validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "validation_error", "message": str(e)}
+        )
+    except Exception as e:
+        logger.error(f"❌ Request parsing error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_request", "message": str(e)}
+        )
 
 
 @router.post(

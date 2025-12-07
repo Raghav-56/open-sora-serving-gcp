@@ -49,3 +49,45 @@ VALID_NUM_FRAMES = [17, 33, 49, 65, 81, 97, 113, 129]
 DEFAULT_NUM_FRAMES = 49
 DEFAULT_NUM_STEPS = 50
 DEFAULT_ASPECT_RATIO = "16:9"
+
+
+def resolve_runtime_defaults(config: OpenSoraConfig) -> dict:
+    """
+    Resolve environment and config-derived default runtime values.
+
+    Returns a dict with keys:
+      - motion_default: str or int
+      - num_steps: int
+      - fps: int
+      - timeout_seconds: Optional[int]
+      - guidance: Optional[float]
+    """
+    resolved_motion_default = DEFAULT_MOTION_SCORE_ENV
+    if DEFAULT_NUM_STEPS_ENV and DEFAULT_NUM_STEPS_ENV.isdigit():
+        resolved_num_steps = int(DEFAULT_NUM_STEPS_ENV)
+    else:
+        resolved_num_steps = config.default_num_steps
+
+    if DEFAULT_FPS_ENV and DEFAULT_FPS_ENV.isdigit():
+        resolved_fps = int(DEFAULT_FPS_ENV)
+    else:
+        resolved_fps = config.default_fps
+
+    resolved_timeout = None
+    if DEFAULT_TIMEOUT_SECONDS_ENV and DEFAULT_TIMEOUT_SECONDS_ENV.isdigit():
+        resolved_timeout = int(DEFAULT_TIMEOUT_SECONDS_ENV)
+
+    guidance = None
+    if DEFAULT_GUIDANCE_ENV is not None:
+        try:
+            guidance = float(DEFAULT_GUIDANCE_ENV)
+        except ValueError:
+            guidance = None
+
+    return {
+        "motion_default": resolved_motion_default,
+        "num_steps": resolved_num_steps,
+        "fps": resolved_fps,
+        "timeout_seconds": resolved_timeout,
+        "guidance": guidance,
+    }
