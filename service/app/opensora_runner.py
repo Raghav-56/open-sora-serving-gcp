@@ -46,12 +46,10 @@ class OpenSoraRunner:
     This wrapper uses t2i2v mode for best quality results.
     """
     
-    # Use simpler t2v configs instead of t2i2v for better stability
-    # t2v = text-to-video (direct generation)
-    # t2i2v = text-to-image-to-video (uses Flux, more complex)
+    # Custom single-GPU configs with shardformer disabled for Vertex AI stability
     RESOLUTION_CONFIGS = {
-        "256px": "configs/diffusion/inference/256px.py",
-        "768px": "configs/diffusion/inference/768px.py",
+        "256px": "configs/diffusion/inference/256px_single_gpu.py",
+        "768px": "configs/diffusion/inference/768px_single_gpu.py",
     }
     
     VALID_ASPECT_RATIOS = ["16:9", "9:16", "1:1", "2.39:1"]
@@ -196,6 +194,7 @@ class OpenSoraRunner:
         # CUDA and memory settings for stability
         env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:512"
         env["CUDA_VISIBLE_DEVICES"] = "0"
+        env["CUDA_LAUNCH_BLOCKING"] = "0"  # Async for performance
         
         # Distributed settings for single GPU mode
         env["MASTER_ADDR"] = "localhost"
@@ -212,10 +211,17 @@ class OpenSoraRunner:
         # ColossalAI settings
         env["COLOSSALAI_LAZY_INIT"] = "1"
         
-        # Use plain Python instead of torchrun to avoid subprocess issues
+        # Try to use PyTorch's native SDPA instead of flash attention
+        env["TORCH_SDPA_FLASH_ATTENTION"] = "0"
+        env["ATTN_BACKEND"] = "sdpa"
+        
+        # Use torchrun with single process to properly initialize distributed environment
+        # This is required because Open-Sora uses dist.barrier() at the end
         cmd = [
-            "python",
-            "-u",  # Unbuffered output
+            "torchrun",
+            "--nproc_per_node=1",
+            "--standalone",
+            "--nnodes=1",
             "scripts/diffusion/inference.py",
             config_path,
             "--save-dir", str(output_dir),
@@ -251,22 +257,28 @@ class OpenSoraRunner:
             
             process.wait(timeout=1800)
             
+            # Check for generated video FIRST, even if process returned non-zero
+            # (Open-Sora may crash at dist.barrier() after saving video)
+            video_path = self._find_latest_video(output_dir)
+            
+            if video_path:
+                logger.info(f"Video generated: {video_path}")
+                if process.returncode != 0:
+                    logger.warning(f"Process exited with code {process.returncode} but video was saved")
+                return str(video_path), seed
+            
+            # No video found - this is a real failure
             if process.returncode != 0:
                 error = "".join(output_lines[-30:])
                 logger.error(f"Generation failed (exit code {process.returncode})")
                 logger.error(f"Output: {error}")
                 raise RuntimeError(f"Video generation failed: {error[-500:]}")
             
-            video_path = self._find_latest_video(output_dir)
-            if not video_path:
-                # Log all output for debugging
-                logger.error("No video file found. Full output:")
-                for line in output_lines[-50:]:
-                    logger.error(line.strip())
-                raise RuntimeError("No video file generated")
-            
-            logger.info(f"Video generated: {video_path}")
-            return str(video_path), seed
+            # Process succeeded but no video - unexpected
+            logger.error("No video file found. Full output:")
+            for line in output_lines[-50:]:
+                logger.error(line.strip())
+            raise RuntimeError("No video file generated")
             
         except subprocess.TimeoutExpired:
             process.kill()

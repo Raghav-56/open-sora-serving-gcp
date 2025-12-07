@@ -101,6 +101,9 @@ RUN uv add \
 # Copy application code
 COPY app/ /app/app/
 
+# Copy custom single-GPU configs (shardformer disabled for stability)
+COPY app/configs/ /app/configs/diffusion/inference/
+
 # Verify app structure at build time
 RUN test -f /app/app/main.py && \
     test -f /app/app/opensora_runner.py && \

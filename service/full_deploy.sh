@@ -9,6 +9,9 @@
 
 set -e
 
+# Note: Git Bash path conversion will be disabled per-command where needed
+# using MSYS_NO_PATHCONV=1 prefix
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -67,7 +70,7 @@ ACCELERATOR_TYPE=${ACCELERATOR_TYPE:-nvidia-a100-80gb}
 # Computed values
 IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}:${TAG}"
 MODEL_NAME="opensora-video-${TAG}"
-ENDPOINT_NAME="opensora-video-endpoint"
+ENDPOINT_NAME="opensora-video-endpoint_testing"
 SERVICE_ACCOUNT="ml-model-serving@${PROJECT_ID}.iam.gserviceaccount.com"
 
 # Container environment variables
@@ -157,7 +160,7 @@ fi
 # echo "  Using Cloud Build (this takes 15-20 minutes)..."
 # echo "  Image: ${IMAGE_URI}"
 # echo ""
-echo -e "${YELLOW}  [SKIPPED] Image already exists: ${IMAGE_URI}${NC}"
+# #echo -e "${YELLOW}  [SKIPPED] Image already exists: ${IMAGE_URI}${NC}"
 
 # gcloud builds submit \
 #     --region="$REGION" \
@@ -203,6 +206,8 @@ fi
 
 if [ "$SHOULD_UPLOAD" = true ]; then
     echo "  Uploading model..."
+    # Exclude route arguments from Git Bash path conversion
+    MSYS2_ARG_CONV_EXCL="--container-health-route;--container-predict-route" \
     gcloud ai models upload \
         --region="$REGION" \
         --display-name="$MODEL_NAME" \

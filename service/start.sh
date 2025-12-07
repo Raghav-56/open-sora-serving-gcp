@@ -81,12 +81,12 @@ if command -v nvidia-smi &> /dev/null; then
     GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo "Unable to query")
     echo "  GPU: $GPU_INFO"
     
-    # Check CUDA availability in Python
-    CUDA_CHECK=$(uv run python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Devices: {torch.cuda.device_count()}')" 2>/dev/null || echo "CUDA check failed")
+    # Check CUDA availability in Python (venv already activated)
+    CUDA_CHECK=$(python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Devices: {torch.cuda.device_count()}')" 2>/dev/null || echo "CUDA check failed")
     echo "  $CUDA_CHECK"
     
     # Warn if no GPU detected
-    if ! uv run python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+    if ! python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
         echo ""
         echo "WARNING: CUDA not available! Video generation will be extremely slow."
         echo "  Ensure container is started with --gpus all"
@@ -100,7 +100,7 @@ echo ""
 echo "[3/4] Downloading Open-Sora v2 weights from GCS..."
 echo "-------------------------------------------------------------"
 
-uv run python -u app/bootstrap_weights.py
+python -u app/bootstrap_weights.py
 BOOTSTRAP_EXIT=$?
 
 if [ $BOOTSTRAP_EXIT -ne 0 ]; then
@@ -139,7 +139,7 @@ echo "  Server starting... (Ctrl+C to stop)"
 echo ""
 
 # Use exec to replace shell process for proper signal handling
-exec uv run python -m uvicorn app.main:app \
+exec python -m uvicorn app.main:app \
     --host 0.0.0.0 \
     --port $PORT \
     --workers 1 \
