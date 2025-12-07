@@ -46,9 +46,12 @@ class OpenSoraRunner:
     This wrapper uses t2i2v mode for best quality results.
     """
     
+    # Use simpler t2v configs instead of t2i2v for better stability
+    # t2v = text-to-video (direct generation)
+    # t2i2v = text-to-image-to-video (uses Flux, more complex)
     RESOLUTION_CONFIGS = {
-        "256px": "configs/diffusion/inference/t2i2v_256px.py",
-        "768px": "configs/diffusion/inference/t2i2v_768px.py",
+        "256px": "configs/diffusion/inference/256px.py",
+        "768px": "configs/diffusion/inference/768px.py",
     }
     
     VALID_ASPECT_RATIOS = ["16:9", "9:16", "1:1", "2.39:1"]
@@ -186,12 +189,33 @@ class OpenSoraRunner:
         logger.info(f"  Resolution: {resolution}, Aspect: {aspect_ratio}")
         logger.info(f"  Frames: {num_frames}, Steps: {num_steps}, Seed: {seed}")
         
-        nproc = max(1, self.num_gpus)
+        # Build environment for subprocess
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(self.opensora_dir)
         
+        # CUDA and memory settings for stability
+        env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:512"
+        env["CUDA_VISIBLE_DEVICES"] = "0"
+        
+        # Distributed settings for single GPU mode
+        env["MASTER_ADDR"] = "localhost"
+        env["MASTER_PORT"] = "29500"
+        env["WORLD_SIZE"] = "1"
+        env["RANK"] = "0"
+        env["LOCAL_RANK"] = "0"
+        
+        # Disable NCCL timeouts and warnings
+        env["NCCL_DEBUG"] = "WARN"
+        env["NCCL_TIMEOUT"] = "1800"
+        env["TORCH_NCCL_BLOCKING_WAIT"] = "0"
+        
+        # ColossalAI settings
+        env["COLOSSALAI_LAZY_INIT"] = "1"
+        
+        # Use plain Python instead of torchrun to avoid subprocess issues
         cmd = [
-            "torchrun",
-            "--nproc_per_node", str(nproc),
-            "--standalone",
+            "python",
+            "-u",  # Unbuffered output
             "scripts/diffusion/inference.py",
             config_path,
             "--save-dir", str(output_dir),
@@ -204,9 +228,7 @@ class OpenSoraRunner:
             "--motion-score", str(motion_score),
         ]
         
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(self.opensora_dir)
-        env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        logger.info(f"Running command: {' '.join(cmd[:5])}...")
         
         try:
             process = subprocess.Popen(
@@ -216,21 +238,31 @@ class OpenSoraRunner:
                 text=True,
                 cwd=str(self.opensora_dir),
                 env=env,
+                # Ensure proper signal handling
+                start_new_session=True,
             )
             
             output_lines = []
             for line in process.stdout:
                 output_lines.append(line)
+                # Log progress lines
+                if "%" in line or "step" in line.lower() or "generating" in line.lower():
+                    logger.info(f"Progress: {line.strip()}")
             
             process.wait(timeout=1800)
             
             if process.returncode != 0:
-                error = "".join(output_lines[-20:])
-                logger.error(f"Generation failed: {error[:500]}")
-                raise RuntimeError(f"Generation failed: {error[:500]}")
+                error = "".join(output_lines[-30:])
+                logger.error(f"Generation failed (exit code {process.returncode})")
+                logger.error(f"Output: {error}")
+                raise RuntimeError(f"Video generation failed: {error[-500:]}")
             
             video_path = self._find_latest_video(output_dir)
             if not video_path:
+                # Log all output for debugging
+                logger.error("No video file found. Full output:")
+                for line in output_lines[-50:]:
+                    logger.error(line.strip())
                 raise RuntimeError("No video file generated")
             
             logger.info(f"Video generated: {video_path}")
@@ -239,6 +271,14 @@ class OpenSoraRunner:
         except subprocess.TimeoutExpired:
             process.kill()
             raise RuntimeError("Generation timed out (30 min)")
+        except Exception as e:
+            logger.error(f"Generation error: {e}")
+            if 'process' in locals():
+                try:
+                    process.kill()
+                except:
+                    pass
+            raise
     
     def _find_latest_video(self, output_dir: Path) -> Optional[Path]:
         """Find the most recently created video file."""

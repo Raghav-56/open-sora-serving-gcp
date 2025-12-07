@@ -8,7 +8,20 @@ FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC \
-    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    # Memory and CUDA settings for stability
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512 \
+    # Distributed settings for single GPU mode
+    MASTER_ADDR=localhost \
+    MASTER_PORT=29500 \
+    WORLD_SIZE=1 \
+    RANK=0 \
+    LOCAL_RANK=0 \
+    # NCCL settings
+    NCCL_DEBUG=WARN \
+    NCCL_TIMEOUT=1800 \
+    # ColossalAI settings
+    COLOSSALAI_LAZY_INIT=1 \
+    # Hugging Face cache
     HF_HOME=/root/.cache/huggingface \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -66,7 +79,7 @@ RUN uv sync --no-dev --no-cache
 ENV VIRTUAL_ENV=/app/.venv
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-# Install flash-attention (optional, requires build)
+# Install flash-attention (required by Open-Sora)
 # Using --no-build-isolation to use existing CUDA environment
 RUN uv add --no-build-isolation flash-attn || echo "Flash attention build skipped (optional)"
 

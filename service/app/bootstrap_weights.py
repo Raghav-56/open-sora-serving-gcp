@@ -7,12 +7,12 @@ import os
 import sys
 from pathlib import Path
 
+# Add /app to Python path BEFORE imports so absolute imports work when run as script
+sys.path.insert(0, "/app")
+
 from loguru import logger
 
-from .gcs_io import download_directory
-
-# Add /app to Python path so imports work when run as script
-sys.path.insert(0, "/app")
+from app.gcs_io import download_directory
 
 
 class WeightBootstrapper:
