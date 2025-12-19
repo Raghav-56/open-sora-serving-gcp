@@ -101,21 +101,32 @@ This is a classic **producer-consumer pattern**:
 
 ### 4. Open-Sora Runner (`app/opensora/`)
 
-**Purpose**: Wrapper around the Open-Sora model
+**Purpose**: Wrapper around the Open-Sora model with torchrun integration
 
 **Module Structure**:
 
-- `config.py`: Model configuration constants and MODE_CONFIGS
-- `command_builder.py`: Builds torchrun CLI commands
+- `config.py`: Model configuration constants and MODE_CONFIGS (including t2v_single_gpu)
+- `command_builder.py`: Builds torchrun CLI commands with distributed environment
 - `runner.py`: OpenSoraRunner class (main interface)
 
 **What it does**:
 
 - Verifies model weights exist (main checkpoint, VAE, T5, CLIP)
 - Detects GPU configuration
-- Runs `torchrun` subprocess for video generation
-- Returns generated video paths (for multi-sample), seed used, and a
-  tail of recent logs
+- Builds torchrun commands with `--standalone` flag for single GPU
+- Runs subprocess with proper distributed environment variables:
+  - `MASTER_ADDR=localhost`
+  - `MASTER_PORT=29500`
+  - `TORCH_SDPA_FLASH_ATTENTION=0`
+  - `ATTN_BACKEND=sdpa`
+- Checks for video existence BEFORE failing on non-zero exit code (handles Open-Sora cleanup crashes)
+- Returns generated video paths (for multi-sample), seed used, and log tail
+
+**Generation Modes**:
+
+- `t2v_single_gpu`: Single GPU optimized with custom configs (shardformer disabled)
+- `t2v`: Direct text-to-video
+- `t2i2v`: Text-to-image-to-video using Flux
 
 **Resolution Configurations**:
 
@@ -123,6 +134,13 @@ This is a classic **producer-consumer pattern**:
 - `768px`: Higher resolution, slower generation (~10-15 min for 49 frames)
 
 **Motion Score**: Controls motion intensity (1-5 or "dynamic", default 4). Lower values produce calmer videos, higher values produce more dynamic motion.
+
+**Key Implementation Details**:
+
+- Uses torchrun even for single GPU to properly initialize distributed environment
+- Custom config files (`app/configs/256px_single_gpu.py`, `768px_single_gpu.py`) with `shardformer=False` for T5 encoder
+- Robust error handling: checks if video was generated even when process exits with error
+- PyTorch SDPA attention backend for hardware compatibility
 
 ### 5. Job Manager (`app/jobs/`)
 
@@ -288,9 +306,14 @@ open-sora-serving-gcp/service/
     │
     ├── opensora/              # Open-Sora model wrapper
     │   ├── __init__.py
-    │   ├── config.py          # Model configuration
-    │   ├── command_builder.py # CLI command construction
+    │   ├── config.py          # Model configuration & MODE_CONFIGS
+    │   ├── command_builder.py # Torchrun command construction
     │   └── runner.py          # OpenSoraRunner (model interface)
+    │
+    ├── configs/               # Custom single-GPU configurations
+    │   ├── __init__.py
+    │   ├── 256px_single_gpu.py  # Single GPU config (shardformer disabled)
+    │   └── 768px_single_gpu.py  # High-res single GPU config
     │
     ├── api/                   # FastAPI routers
     │   ├── __init__.py

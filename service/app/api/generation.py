@@ -50,6 +50,7 @@ async def submit_video_generation(request: VideoGenerationRequest) -> dict:
     logger.info(f"  Frames: {request.num_frames}")
     logger.info(f"  Aspect Ratio: {request.aspect_ratio}")
     logger.info(f"  Motion Score: {request.motion_score}")
+    logger.info(f"  Num Steps: {request.num_steps}")
     logger.info(f"  Mode: {request.mode}")
     logger.info(f"  FPS: {request.fps}")
     logger.info(f"  Num Samples: {request.num_samples}")
@@ -69,6 +70,7 @@ async def submit_video_generation(request: VideoGenerationRequest) -> dict:
                 Optional[Union[int, str]], request.motion_score
             ),
             seed=request.seed,
+            num_steps=request.num_steps,
             mode=request.mode,
             fps=request.fps,
             num_samples=request.num_samples,

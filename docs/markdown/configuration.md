@@ -48,7 +48,7 @@ ACCELERATOR_COUNT=1
 ENV DEFAULT_RESOLUTION=256px \
     DEFAULT_NUM_FRAMES=49 \
     DEFAULT_ASPECT_RATIO=16:9 \
-    DEFAULT_MODE=t2i2v \
+    DEFAULT_MODE=t2v_single_gpu \
     DEFAULT_FPS=24 \
     DEFAULT_NUM_SAMPLES=1 \
     DEFAULT_MOTION_SCORE=4 \
@@ -131,7 +131,7 @@ GENERATION_TIMEOUT=3600
 | `DEFAULT_RESOLUTION` | `256px` | `256px`, `768px` | Video resolution |
 | `DEFAULT_NUM_FRAMES` | `49` | 17, 33, 49, 65, 81, 97, 113, 129 | Frame count (4k+1 format) |
 | `DEFAULT_ASPECT_RATIO` | `16:9` | `16:9`, `9:16`, `1:1`, `2.39:1` | Aspect ratio |
-| `DEFAULT_MODE` | `t2i2v` | `t2v`, `t2i2v` | Generation mode |
+| `DEFAULT_MODE` | `t2v_single_gpu` | `t2v_single_gpu`, `t2v`, `t2i2v` | Generation mode |
 | `DEFAULT_FPS` | `24` | Any positive integer | Frames per second |
 | `DEFAULT_NUM_SAMPLES` | `1` | Any positive integer | Number of videos to generate |
 
@@ -139,7 +139,7 @@ GENERATION_TIMEOUT=3600
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEFAULT_MOTION_SCORE` | `4` | Motion intensity (1-10, recommend 5-7) |
+| `DEFAULT_MOTION_SCORE` | `4` | Motion intensity (1-5 or "dynamic") |
 | `DEFAULT_NUM_STEPS` | `50` | Diffusion sampling steps |
 | `DEFAULT_GUIDANCE` | *(from config)* | Guidance scale (typically 7.5) |
 | `DEFAULT_TIMEOUT_SECONDS` | `1800` | Per-job timeout (30 minutes) |

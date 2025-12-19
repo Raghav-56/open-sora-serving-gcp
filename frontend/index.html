@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Open Sora Console</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Open Sora Console</h1>
+            <p>v2.0 Inference Interface</p>
+        </header>
+
+        <main>
+            <form id="videoForm">
+                <div class="form-group">
+                    <label for="prompt">PROMPT</label>
+                    <textarea 
+                        id="prompt" 
+                        name="prompt" 
+                        rows="3" 
+                        placeholder="Enter your prompt here..."
+                        required
+                    ></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="resolution">RESOLUTION</label>
+                        <select id="resolution" name="resolution">
+                            <option value="256px">256px (Fast)</option>
+                            <option value="768px">768px (High Quality)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="num_frames">FRAMES</label>
+                        <select id="num_frames" name="num_frames">
+                            <option value="17">17</option>
+                            <option value="33">33</option>
+                            <option value="49">49</option>
+                            <option value="65">65</option>
+                            <option value="81">81</option>
+                            <option value="97">97</option>
+                            <option value="113">113</option>
+                            <option value="129">129</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="aspect_ratio">ASPECT RATIO</label>
+                        <select id="aspect_ratio" name="aspect_ratio">
+                            <option value="16:9">16:9 (Widescreen)</option>
+                            <option value="9:16">9:16 (Portrait)</option>
+                            <option value="1:1">1:1 (Square)</option>
+                            <option value="4:3">4:3</option>
+                            <option value="3:4">3:4</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="mode">MODE</label>
+                        <select id="mode" name="mode">
+                            <option value="t2v">Text to Video</option>
+                            <option value="i2v">Image to Video</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button type="submit" id="generateBtn" class="btn-primary">
+                    Initialize Generation
+                </button>
+            </form>
+
+            <div id="status" class="status hidden"></div>
+
+            <div id="result" class="result hidden">
+                <h3>Output</h3>
+                <div id="videoContainer"></div>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

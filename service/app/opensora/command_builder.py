@@ -18,6 +18,7 @@ class CommandBuilder:
         output_dir: Path,
         prompt_arg: List[str],
         seed: int,
+        resolution: str,
         num_frames: int,
         num_steps: int,
         aspect_ratio: str,
@@ -38,6 +39,7 @@ class CommandBuilder:
             output_dir: Directory to save generated videos
             prompt_arg: Either ["--prompt", "text"] or ["--dataset.data-path", "file.csv"]
             seed: Random seed for reproducibility
+            resolution: Video resolution (256px or 768px)
             num_frames: Number of frames to generate (4k+1 format)
             num_steps: Number of diffusion steps
             aspect_ratio: Video aspect ratio (16:9, 9:16, 1:1, 2.39:1)
@@ -61,19 +63,23 @@ class CommandBuilder:
             config_path,
             "--save-dir", str(output_dir),
             *prompt_arg,
+            # Global seed for reproducibility
             "--seed", str(seed),
+            # Override sampling_option fields from user request
             "--sampling_option.seed", str(seed),
+            "--sampling_option.resolution", resolution,
             "--sampling_option.num_frames", str(num_frames),
             "--sampling_option.num_steps", str(num_steps),
-            "--aspect_ratio", aspect_ratio,
-            "--motion-score", str(motion_score),
+            "--sampling_option.aspect_ratio", aspect_ratio,
+            # Top-level config overrides
+            "--motion_score", str(motion_score),
             "--fps_save", str(fps),
             "--num_sample", str(num_samples),
         ]
 
-        # Optional guidance scale
+        # Override guidance in sampling_option (where Open-Sora expects it)
         if guidance is not None:
-            cmd.extend(["--guidance", str(guidance)])
+            cmd.extend(["--sampling_option.guidance", str(guidance)])
 
         # Optional prompt refinement
         if prompt_refine:
@@ -128,29 +134,12 @@ class CommandBuilder:
         cmd: List[str], nproc: int
     ) -> List[str]:
         """
-        If the command uses torchrun and there's only a single GPU process,
-        convert it into a direct python invocation for a simpler single-process run.
+        Keep torchrun even for single GPU to properly initialize
+        distributed environment. Open-Sora uses dist.barrier() at
+        the end which requires proper initialization.
         """
-        if nproc != 1 or not cmd or cmd[0] != "torchrun":
-            return cmd
-
-        filtered = []
-        i = 0
-        while i < len(cmd):
-            if cmd[i] == "torchrun":
-                i += 1
-                continue
-            if cmd[i] in ("--nproc_per_node",):
-                i += 2
-                continue
-            if cmd[i] == "--standalone":
-                i += 1
-                continue
-            filtered.append(cmd[i])
-            i += 1
-        if filtered and filtered[0].endswith(".py"):
-            filtered = ["python"] + filtered
-        return filtered
+        # Always use torchrun, even for single GPU
+        return cmd
 
     @staticmethod
     def build_runtime_env(
@@ -158,6 +147,10 @@ class CommandBuilder:
     ) -> dict:
         """
         Build a suitable environment dict for running the inference command.
+        
+        For single GPU (nproc=1), we use torchrun --standalone to properly
+        initialize distributed environment, as Open-Sora uses dist.barrier()
+        even in single GPU mode.
         """
         env = dict(base_env) if base_env else os.environ.copy()
         env["PYTHONPATH"] = str(opensora_dir)
@@ -165,18 +158,19 @@ class CommandBuilder:
             "expandable_segments:True,max_split_size_mb:512"
         )
 
-        if nproc == 1:
-            env.setdefault("CUDA_VISIBLE_DEVICES", "0")
-            env.setdefault("MASTER_ADDR", "localhost")
-            env.setdefault("MASTER_PORT", "29500")
-            env.setdefault("RANK", "0")
-            env.setdefault("LOCAL_RANK", "0")
-            env.setdefault("NCCL_DEBUG", "WARN")
-            env.setdefault("NCCL_TIMEOUT", "1800")
-            env.setdefault("TORCH_NCCL_BLOCKING_WAIT", "0")
-            env.setdefault("COLOSSALAI_LAZY_INIT", "1")
-        else:
-            env.setdefault("WORLD_SIZE", str(nproc))
-            env.setdefault("MASTER_ADDR", env.get("MASTER_ADDR", "localhost"))
-            env.setdefault("MASTER_PORT", env.get("MASTER_PORT", "29500"))
+        # Set GPU device
+        env["CUDA_VISIBLE_DEVICES"] = "0"
+        env["CUDA_LAUNCH_BLOCKING"] = "0"  # Async for performance
+        
+        # Distributed settings (torchrun sets these, ensure they exist)
+        env.setdefault("MASTER_ADDR", "localhost")
+        env.setdefault("MASTER_PORT", "29500")
+        
+        # ColossalAI settings
+        env["COLOSSALAI_LAZY_INIT"] = "1"
+        
+        # Use PyTorch's native SDPA instead of flash attention for stability
+        env["TORCH_SDPA_FLASH_ATTENTION"] = "0"
+        env["ATTN_BACKEND"] = "sdpa"
+        
         return env

@@ -33,6 +33,7 @@ nav:
   - Configuration: configuration.md
   - Deployment Guide: deployment_guide.md
   - Local Running: local_running.md
+  - Scripts: scripts.md
   - Code Reference: code_reference.md
 
 # Essential markdown extensions only

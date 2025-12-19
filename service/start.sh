@@ -148,10 +148,20 @@ if [ "${ENABLE_GPU_LOGGING:-0}" = "1" ] && command -v nvidia-smi &> /dev/null; t
     export NVIDIA_SMI_LOG_PID=$!
 fi
 
-# Step 3: Weight Bootstrap
-echo "[3/4] Downloading Open-Sora v2 weights from GCS..."
+# Step 3: Weight Management
+echo "[3/4] Model Weight Management"
 echo "-------------------------------------------------------------"
 
+# Ensure MODEL_PATH directory exists
+MODEL_PATH="${MODEL_PATH:-/app/ckpts}"
+mkdir -p "$MODEL_PATH"
+
+echo "  Running bootstrap script..."
+echo "  The script will check for existing weights and download if needed"
+echo "  Location: ${MODEL_PATH}"
+echo ""
+
+# Always run bootstrap - it has smart detection built-in
 uv run python -m app.scripts.bootstrap_weights
 BOOTSTRAP_EXIT=$?
 
@@ -168,11 +178,11 @@ if [ $BOOTSTRAP_EXIT -ne 0 ]; then
     echo "       gs://${WEIGHT_BUCKET}/ckpts/Open_Sora_v2.safetensors"
     echo "       gs://${WEIGHT_BUCKET}/ckpts/hunyuan_vae.safetensors"
     echo "  4. Network connectivity to GCS is working"
+    echo ""
+    echo "  Alternative: Mount pre-downloaded weights at ${MODEL_PATH}"
     exit 1
 fi
 
-echo ""
-echo "  Weight bootstrap complete"
 echo ""
 
 # Step 4: Start FastAPI Server

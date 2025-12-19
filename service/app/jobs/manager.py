@@ -79,6 +79,7 @@ class JobManager:
         aspect_ratio: str,
         motion_score: Optional[Union[int, str]],
         seed: Optional[int],
+        num_steps: Optional[int],
         mode: str,
         fps: int,
         num_samples: int,
@@ -95,9 +96,10 @@ class JobManager:
             resolution: "256px" or "768px"
             num_frames: Frame count (4k+1 format)
             aspect_ratio: "16:9", "9:16", "1:1", "2.39:1"
-            motion_score: Motion intensity (1-10, None for auto)
+            motion_score: Motion intensity (1-5, None for auto)
             seed: Random seed (optional)
-            mode: Generation mode ("t2i2v" or "t2v")
+            num_steps: Number of diffusion steps (optional)
+            mode: Generation mode ("t2i2v", "t2v", or "t2v_single_gpu")
             fps: Frames per second
             num_samples: Number of samples to generate
             guidance: Guidance scale override
@@ -119,6 +121,7 @@ class JobManager:
             aspect_ratio=aspect_ratio,
             motion_score=motion_score,
             seed=seed,
+            num_steps=num_steps,
             mode=mode,
             fps=fps,
             num_samples=num_samples,

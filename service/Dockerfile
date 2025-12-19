@@ -1,54 +1,18 @@
 # Open-Sora Serving API for Vertex AI
 # Optimized for NVIDIA H100/A100 GPU deployment
+# 
+# Build stages:
+# 1. base: CUDA + system packages (rarely changes, excellent caching)
+# 2. python-deps: Open-Sora + Python dependencies (changes on code updates)
+# 3. runtime: Application code + startup logic (changes frequently)
 
-FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
+# Stage 1: Base System Dependencies
+FROM nvidia/cuda:12.1.1-devel-ubuntu22.04 AS base
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Environment configuration
-# System settings
-ENV PYTHONUNBUFFERED=1 \
-    DEBIAN_FRONTEND=noninteractive \
-    TZ=Etc/UTC \
-    # PyTorch cuda allocator config
-    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512 \
-    HF_HOME=/root/.cache/huggingface \
-    UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy \
-    # API Server (override via docker run -e or deployment config)
-    PORT=8080 \
-    # Optional: enable continuous GPU monitoring logs inside container.
-    # Set ENABLE_GPU_LOGGING=1 to start a background nvidia-smi logger.
-    ENABLE_GPU_LOGGING=0 \
-    # NCCL settings (for reliability and debugging of collectives)
-    NCCL_DEBUG=INFO \
-    NCCL_TIMEOUT=1800 \
-    # ColossalAI setting: lazy initialization can avoid some initialization-time allocations
-    COLOSSALAI_LAZY_INIT=1 \
-    # Model weights configuration
-    WEIGHT_BUCKET="nannie-opensora-weights-so" \
-    MODEL_PATH=/app/ckpts \
-    WEIGHT_PREFIX=ckpts/ \
-    FORCE_DOWNLOAD=false \
-    # Job manager settings
-    JOB_RETENTION_SECONDS=3600 \
-    MAX_COMPLETED_JOBS=100 \
-    # Video generation defaults (API request defaults)
-    DEFAULT_RESOLUTION=256px \
-    DEFAULT_NUM_FRAMES=49 \
-    DEFAULT_ASPECT_RATIO=16:9 \
-    DEFAULT_MODE=t2v \
-    DEFAULT_FPS=24 \
-    DEFAULT_NUM_SAMPLES=1 \
-    # Generation parameters (runner-level defaults)
-    DEFAULT_MOTION_SCORE=4 \
-    DEFAULT_NUM_STEPS=50 \
-    DEFAULT_GUIDANCE="" \
-    DEFAULT_TIMEOUT_SECONDS="" \
-    GENERATION_TIMEOUT=1800 \
-    BASE_OUTPUT_DIR=/tmp/opensora_outputs
-
-# Install system dependencies
+# System packages and build tools
+# These rarely change, so this layer caches well
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     python3.11 \
@@ -74,27 +38,24 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     ln -s /root/.local/bin/uv /usr/local/bin/uv && \
     ln -s /root/.local/bin/uvx /usr/local/bin/uvx
 
+# Stage 2: Python Dependencies & Open-Sora
+FROM base AS python-deps
+
 WORKDIR /app
 
 # Clone Open-Sora repository
+# This layer only rebuilds if Open-Sora repo changes
 RUN git clone --depth 1 https://github.com/Raghav-56/Open-Sora.git /app
 
-# Install Open-Sora and dependencies
+# Install Open-Sora and core dependencies
+# This is the most expensive operation, so we do it before copying app code
 RUN uv sync --no-dev --no-cache
 
 # Activate the virtual environment created by uv sync
 ENV VIRTUAL_ENV=/app/.venv
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-# Install flash-attention (optional, requires build)
-# Using --no-build-isolation to use existing CUDA environment
-# NOTE: commented out for now to reduce possible OOM/segfault issues
-# RUN uv add --no-build-isolation flash-attn || echo "Flash attention build skipped (optional)"
-
-# Install tensornvme for high-performance IO (optional)
-# RUN uv add git+https://github.com/hpcaitech/tensornvme.git || echo "TensorNVMe build skipped (optional)"
-
-# Install API service dependencies using native uv add
+# Install API service dependencies
 RUN uv add \
     fastapi \
     "uvicorn[standard]" \
@@ -106,10 +67,71 @@ RUN uv add \
     imageio \
     imageio-ffmpeg
 
+# Stage 3: Runtime Application
+FROM python-deps AS runtime
+
+# Environment configuration
+ENV PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC \
+    # PyTorch CUDA allocator config optimized for A100
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512,garbage_collection_threshold:0.8 \
+    # A100-specific CUDA optimization flags
+    CUDA_LAUNCH_BLOCKING=0 \
+    CUDA_CACHE_DISABLE=0 \
+    CUDA_CACHE_MAXSIZE=2147483648 \
+    # TF32 settings
+    TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=0 \
+    HF_HOME=/root/.cache/huggingface \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    # API Server
+    PORT=8080 \
+    ENABLE_GPU_LOGGING=0 \
+    # Model weights configuration
+    WEIGHT_BUCKET="nannie-opensora-weights-so" \
+    MODEL_PATH=/app/ckpts \
+    WEIGHT_PREFIX=ckpts/ \
+    FORCE_DOWNLOAD=false \
+    # Job manager settings
+    JOB_RETENTION_SECONDS=3600 \
+    MAX_COMPLETED_JOBS=100 \
+    # Video generation defaults
+    DEFAULT_RESOLUTION=256px \
+    DEFAULT_NUM_FRAMES=49 \
+    DEFAULT_ASPECT_RATIO=16:9 \
+    DEFAULT_MODE=t2v \
+    DEFAULT_FPS=24 \
+    DEFAULT_NUM_SAMPLES=1 \
+    # Generation parameters
+    DEFAULT_MOTION_SCORE=4 \
+    DEFAULT_NUM_STEPS=50 \
+    DEFAULT_GUIDANCE="" \
+    DEFAULT_TIMEOUT_SECONDS="" \
+    GENERATION_TIMEOUT=1800 \
+    BASE_OUTPUT_DIR=/tmp/opensora_outputs \
+    # Python path
+    PYTHONPATH=/app
+
 # Copy application code
+# This changes frequently, so we do it LAST to maximize cache hits
 COPY app/ /app/app/
 
-# Verify app structure at build time using Python imports
+# Copy custom single-GPU configs (shardformer disabled for stability)
+COPY app/configs/ /app/configs/diffusion/inference/
+
+# Copy startup script
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
+
+# Verify app structure at build time
+RUN test -f /app/app/main.py && \
+    test -f /app/app/opensora/runner.py && \
+    test -f /app/configs/diffusion/inference/256px_single_gpu.py && \
+    test -f /app/configs/diffusion/inference/768px_single_gpu.py && \
+    echo "✅ Critical files verified" || \
+    (echo "ERROR: Missing critical application files" && exit 1)
+
 RUN python -c "\
 from app.main import app; \
 from app.scripts.bootstrap_weights import main; \
@@ -122,25 +144,14 @@ from app.utils import upload_video_to_gcs; \
 print('✅ All imports successful')\
 " || (echo "ERROR: Application code structure validation failed" && exit 1)
 
-# Copy startup script
-COPY start.sh /app/start.sh
-RUN chmod +x /app/start.sh
-
 # Create directories with appropriate permissions
 RUN mkdir -p /app/ckpts /tmp/opensora_outputs /app/samples && \
     chmod 777 /tmp/opensora_outputs /app/samples
-
-# Set Python path for module imports
-ENV PYTHONPATH=/app
 
 # Expose API port
 EXPOSE 8080
 
 # Health check with extended start period for model loading
-# - start-period: 10 min grace for ~42GB weight download
-# - interval: Check every minute after healthy
-# - timeout: 10s for health response
-# - retries: 3 failures before marking unhealthy
 HEALTHCHECK --interval=60s --timeout=10s --start-period=600s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
@@ -148,8 +159,9 @@ HEALTHCHECK --interval=60s --timeout=10s --start-period=600s --retries=3 \
 ENTRYPOINT ["/app/start.sh"]
 
 # Build Information
-LABEL maintainer="raghavrgupta56@gmail.com" \
-      description="Open-Sora text-to-video API for Vertex AI" \
-      version="1.0.5" \
+LABEL maintainer="d2460361@gmail.com" \
+      description="Open-Sora text-to-video API for Vertex AI (Multi-Stage Optimized)" \
+      version="1.1.0" \
       gpu="NVIDIA H100/A100" \
-      model="Open-Sora v2 (11B parameters)"
+      model="Open-Sora v2 (11B parameters)" \
+      optimization="multi-stage-build"

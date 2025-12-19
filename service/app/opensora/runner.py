@@ -13,9 +13,10 @@ import random
 import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
+from collections import deque
 
-from loguru import logger
 import torch
+from loguru import logger
 
 from app.opensora.config import (
     OpenSoraConfig,
@@ -25,10 +26,6 @@ from app.opensora.config import (
     resolve_runtime_defaults,
 )
 from app.opensora.command_builder import CommandBuilder
-from app.opensora.gpu import detect_gpus
-from app.opensora.verifier import verify_installation, verify_weights
-from app.opensora.process_runner import run_process_and_tail_logs
-from app.opensora.outputs import find_videos
 
 
 class OpenSoraRunner:
@@ -56,13 +53,110 @@ class OpenSoraRunner:
         self._ready = False
         self.default_output_dir = Path("/tmp/opensora_outputs")
         
-        # GPU detection
-        self.device, self.num_gpus = detect_gpus()
-        # Verify installation and model weights
-        verify_installation(self.opensora_dir)
-        verify_weights(self.model_path)
+        self._setup_gpu()
+        self._verify_installation()
+    
+    def _setup_gpu(self):
+        """Detect and configure GPU with A100-specific optimizations."""
+        if torch.cuda.is_available():
+            self.num_gpus = torch.cuda.device_count()
+            self.device = "cuda"
+            
+            logger.info("GPU Configuration:")
+            for i in range(self.num_gpus):
+                name = torch.cuda.get_device_name(i)
+                memory = torch.cuda.get_device_properties(i).total_memory / 1e9
+                logger.info(f"  GPU {i}: {name} ({memory:.1f} GB)")
+            # Production optimizations for inference
+            # Enable TF32 for A100 GPUs (faster matrix multiplications)
+            try:
+                if any("A100" in torch.cuda.get_device_name(i) for i in range(self.num_gpus)):
+                    torch.backends.cuda.matmul.allow_tf32 = True
+                    torch.backends.cudnn.allow_tf32 = True
+                    logger.info("  Enabled TF32 for A100 GPUs")
+            except Exception:
+                logger.debug("Could not determine GPU model for TF32 optimization")
+
+            # Set optimal CUDNN settings for inference
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+
+            # Clear cached CUDA memory to reduce fragmentation
+            torch.cuda.empty_cache()
+            logger.info("  Configured CUDA for production inference")
+        else:
+            self.device = "cpu"
+            logger.warning(
+                "No GPU detected - inference will be extremely slow"
+            )
+            
+    def _verify_installation(self):
+        """Verify Open-Sora installation and model weights."""
+        logger.info("Verifying Open-Sora installation...")
+        
+        inference_script = self.opensora_dir / "scripts/diffusion/inference.py"
+        if not inference_script.exists():
+            raise FileNotFoundError(
+                f"Open-Sora inference script not found at {inference_script}"
+            )
+        
+        for mode, configs in MODE_CONFIGS.items():
+            for resolution, config_path in configs.items():
+                full_path = self.opensora_dir / config_path
+                if not full_path.exists():
+                    raise FileNotFoundError(
+                        (
+                            f"Config for {mode} {resolution} "
+                            f"not found at {full_path}"
+                        )
+                    )
+        
+        logger.info("Open-Sora code verified")
+        self._verify_weights()
         self._ready = True
     
+    def _verify_weights(self):
+        """Verify model checkpoint files exist."""
+        logger.info(f"Verifying weights at: {self.model_path}")
+        
+        if not self.model_path.exists():
+            raise FileNotFoundError(
+                f"Model path not found: {self.model_path}. "
+                "Run bootstrap_weights.py first."
+            )
+
+        required_paths = {
+            "Main checkpoint": self.model_path / "Open_Sora_v2.safetensors",
+            "VAE checkpoint": self.model_path / "hunyuan_vae.safetensors",
+            "Flux t2i2v checkpoint": self.model_path / "flux1-dev.safetensors",
+            "Flux AE": self.model_path / "flux1-dev-ae.safetensors",
+            "T5 encoder": self.model_path / "google" / "t5-v1_1-xxl",
+            "CLIP encoder": (
+                self.model_path / "openai" / "clip-vit-large-patch14"
+            ),
+        }
+
+        missing = []
+        found = []
+
+        for label, path in required_paths.items():
+            if path.is_file():
+                size_gb = path.stat().st_size / 1e9
+                found.append(f"{label} ({size_gb:.1f} GB)")
+            elif path.is_dir():
+                found.append(f"{label} directory")
+            else:
+                missing.append(f"{label}: {path}")
+
+        if found:
+            logger.info(f"Found: {', '.join(found)}")
+
+        if missing:
+            raise FileNotFoundError(
+                "Missing Open-Sora weights: "
+                + "; ".join(missing)
+                + ". Run bootstrap_weights.py to download."
+            )
     
     def generate(
         self,
@@ -170,6 +264,8 @@ class OpenSoraRunner:
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / "torchrun.log"
 
+        # Bounded tail buffer for returning last N lines to callers
+        log_tail: deque[str] = deque(maxlen=200)
         
         logger.info("Starting video generation:")
         logger.info(f"  Prompt: {prompt[:80]}...")
@@ -190,17 +286,14 @@ class OpenSoraRunner:
         )
 
         nproc = self.num_gpus if self.num_gpus > 0 else 1
-        if nproc != 1 and self.num_gpus == 1:
+        if nproc != 1 and torch.cuda.device_count() == 1:
             logger.warning(
                 "Detected 1 GPU but computed nproc=%s; forcing nproc=1",
                 nproc,
             )
             nproc = 1
 
-        # If prompt contains CLI-like tokens, write it to a temporary CSV
-        # inside the output dir and return an explicit dataset argument.
-        prompt_arg: List[str] = []
-        temp_prompt_file = None
+        # Prepare prompt argument using helper
         prompt_arg, temp_prompt_file = CommandBuilder.prepare_prompt_arg(
             prompt, output_dir
         )
@@ -211,6 +304,7 @@ class OpenSoraRunner:
             output_dir=output_dir,
             prompt_arg=prompt_arg,
             seed=seed,
+            resolution=resolution,
             num_frames=num_frames,
             num_steps=num_steps,
             aspect_ratio=aspect_ratio,
@@ -224,7 +318,7 @@ class OpenSoraRunner:
             nproc=nproc,
         )
 
-        # Normalize the command for single-process runs.
+        # Normalize command for single-GPU runs
         cmd = CommandBuilder.normalize_command_for_single_gpu(cmd, nproc)
         
         runner_mode = "torchrun"
@@ -233,34 +327,93 @@ class OpenSoraRunner:
         logger.info("nproc computed: %s, using %s", nproc, runner_mode)
         short_cmd = " ".join(cmd[:10]) + (" ..." if len(cmd) > 10 else "")
         logger.debug("short execution command: %s", short_cmd)
-        # Build the runtime environment from command builder helper
-        env = CommandBuilder.build_runtime_env(self.opensora_dir, nproc, os.environ.copy())
+        # Build runtime environment
+        env = CommandBuilder.build_runtime_env(
+            self.opensora_dir, nproc, os.environ.copy()
+        )
         
         try:
-            returncode, output_lines, tail_lines = run_process_and_tail_logs(
-                cmd=cmd,
-                cwd=self.opensora_dir,
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(self.opensora_dir),
                 env=env,
-                log_path=log_path,
-                timeout_seconds=effective_timeout,
+                start_new_session=True,
             )
 
-            if returncode != 0:
-                error = "".join(output_lines[-20:])
+            if process.stdout is None:
+                raise RuntimeError("Failed to capture inference output")
+
+            output_lines = []
+            stderr_lines = []
+            with open(log_path, "a", encoding="utf-8") as log_file:
+                # Read stdout
+                for line in process.stdout:
+                    output_lines.append(line)
+                    log_tail.append(line.rstrip())
+                    log_file.write(line)
+                    log_file.flush()
+                    logger.debug(line.rstrip())
+
+            process.wait(timeout=effective_timeout)
+            
+            # Capture any stderr after process completes
+            if process.stderr:
+                stderr_output = process.stderr.read()
+                if stderr_output:
+                    stderr_lines = stderr_output.splitlines(keepends=True)
+            
+            # Check for video FIRST, even if process returned non-zero
+            # (Open-Sora may crash at dist.barrier() after saving video)
+            video_paths = self._find_videos(output_dir)
+            
+            if video_paths:
+                logger.info(f"Video generated: {video_paths}")
+                if process.returncode != 0:
+                    logger.warning(
+                        f"Process exited with code {process.returncode} "
+                        "but video was saved"
+                    )
+                return [str(p) for p in video_paths], seed, list(log_tail)
+            
+            # No video found and non-zero exit code
+            if process.returncode != 0:
+                # Capture ALL output - no truncation
+                full_output = "".join(output_lines)
+                if stderr_lines:
+                    full_stderr = "".join(stderr_lines)
+                else:
+                    full_stderr = "(no stderr)"
+                
+                # Log EVERYTHING
+                logger.error("="*60)
                 logger.error(
-                    "Generation failed (return code %s)", returncode
+                    "Generation failed with return code %s",
+                    process.returncode
                 )
-                logger.error(f"Stderr: {error}")
-                raise RuntimeError(f"Video generation failed: {error[-500:]}")
-
-            video_paths = find_videos(output_dir)
-            if not video_paths:
-                raise RuntimeError("No video file generated")
-
-            logger.info(f"Video generated: {video_paths}")
-            return [str(p) for p in video_paths], seed, tail_lines
-
+                logger.error("COMPLETE STDOUT:")
+                logger.error(full_output)
+                logger.error("COMPLETE STDERR:")
+                logger.error(full_stderr)
+                logger.error("="*60)
+                
+                # Include full output in exception message too
+                full_error = (
+                    f"Exit code {process.returncode}\n\n"
+                    f"STDOUT:\n{full_output}\n\n"
+                    f"STDERR:\n{full_stderr}"
+                )
+                raise RuntimeError(
+                    f"Video generation failed:\n{full_error}"
+                )
+            
+            # Video not found but exit code was 0
+            raise RuntimeError("No video file generated")
+            
         except subprocess.TimeoutExpired as exc:
+            process.kill()
             raise RuntimeError(
                 f"Generation timed out ({effective_timeout} sec)"
             ) from exc
@@ -271,6 +424,15 @@ class OpenSoraRunner:
                 except Exception:
                     pass
     
+    def _find_videos(self, output_dir: Path) -> List[Path]:
+        """Collect generated videos sorted by mtime descending."""
+        video_files: List[Path] = []
+        for ext in ["mp4", "avi", "mov", "webm"]:
+            video_files.extend(output_dir.glob(f"**/*.{ext}"))
+        
+        # Sort by modification time (newest first)
+        video_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return video_files
     
     def is_ready(self) -> bool:
         """Check if runner is ready for inference."""

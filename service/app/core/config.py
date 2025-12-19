@@ -11,7 +11,7 @@ from typing import List
 VALID_RESOLUTIONS: List[str] = ["256px", "768px"]
 VALID_NUM_FRAMES: List[int] = [17, 33, 49, 65, 81, 97, 113, 129]  # 4k+1 format
 VALID_ASPECT_RATIOS: List[str] = ["16:9", "9:16", "1:1", "2.39:1"]
-VALID_MODES: List[str] = ["t2i2v", "t2v"]
+VALID_MODES: List[str] = ["t2i2v", "t2v", "t2v_single_gpu"]
 
 # API Request Defaults (from environment)
 

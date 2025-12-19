@@ -39,6 +39,10 @@ MODE_CONFIGS = {
         "256px": "configs/diffusion/inference/256px.py",
         "768px": "configs/diffusion/inference/768px.py",
     },
+    "t2v_single_gpu": {
+        "256px": "app/configs/256px_single_gpu.py",
+        "768px": "app/configs/768px_single_gpu.py",
+    },
 }
 
 # Valid generation parameters

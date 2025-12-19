@@ -61,9 +61,16 @@ class VideoGenerationRequest(BaseModel):
         description="Random seed for reproducibility (0-4294967295)",
     )
 
+    num_steps: Optional[int] = Field(
+        None,
+        description="Number of diffusion steps. None uses config default (50).",
+        ge=10,
+        le=100,
+    )
+
     mode: str = Field(
         default_factory=lambda: DEFAULT_MODE,
-        description="Generation mode: 't2i2v' (default) or 't2v'",
+        description="Generation mode: 't2i2v', 't2v', or 't2v_single_gpu'",
     )
 
     fps: int = Field(

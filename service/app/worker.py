@@ -101,6 +101,7 @@ class InferenceWorker:
         logger.info(f"  Frames: {job.num_frames}")
         logger.info(f"  Aspect Ratio: {job.aspect_ratio}")
         logger.info(f"  Motion Score: {job.motion_score}")
+        logger.info(f"  Num Steps: {job.num_steps}")
         logger.info(f"  Mode: {job.mode}")
         logger.info(f"  FPS: {job.fps}")
         logger.info(f"  Num Samples: {job.num_samples}")
@@ -118,6 +119,7 @@ class InferenceWorker:
                 aspect_ratio=job.aspect_ratio,
                 motion_score=job.motion_score,
                 seed=job.seed,
+                num_steps=job.num_steps,
                 mode=job.mode,
                 fps=job.fps,
                 num_samples=job.num_samples,

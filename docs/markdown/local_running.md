@@ -602,3 +602,18 @@ docker logs --tail 100 opensora-api
 docker stop opensora-api
 docker rm opensora-api
 ```
+
+### Frontend (Experimental)
+
+There is a simple demo frontend in `frontend/` that can be used for manual testing and demos. This UI is currently in development and is intended for local testing only; it is not production-ready.
+
+Run it locally:
+
+```powershell
+cd frontend
+pip install -r requirements.txt
+python server.py
+# Open http://localhost:5000 in your browser
+```
+
+The frontend proxies requests to the API endpoint configured in `frontend/server.py`.

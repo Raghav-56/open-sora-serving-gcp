@@ -55,6 +55,7 @@ Submit a video generation job.
 | `resolution` | string | No | `"256px"` | `"256px"` or `"768px"` |
 | `num_frames` | int | No | `49` | 17, 33, 49, 65, 81, 97, 113, 129 (4k+1 format) |
 | `aspect_ratio` | string | No | `"16:9"` | `"16:9"`, `"9:16"`, `"1:1"`, `"2.39:1"` |
+| `mode` | string | No | `"t2v_single_gpu"` | `"t2v_single_gpu"`, `"t2v"`, `"t2i2v"` |
 | `motion_score` | int \| "dynamic" | No | `4` | 1-5 or "dynamic" (4-5 natural) |
 | `seed` | int | No | auto | 0 to 4294967295 |
 | `output_bucket` | string | Yes | - | GCS bucket name |

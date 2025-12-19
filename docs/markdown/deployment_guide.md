@@ -13,6 +13,7 @@ Nannie AI - Proprietary System
 2. [Configuration](#configuration)
 3. [Deployment Steps](#deployment-steps)
 4. [Using the API](#using-the-api)
+5. [Script Helpers](#script-helpers)
 
 ## Prerequisites
 
@@ -203,4 +204,25 @@ gcloud logging read \
   "resource.type=aiplatform.googleapis.com/Endpoint AND resource.labels.endpoint_id=${ENDPOINT_ID}" \
   --limit=30 \
   --format="table(timestamp,jsonPayload.message)"
+```
+
+## Script Helpers
+
+This repo ships several PowerShell helpers under the `scripts/` directory that perform common operations such as building containers, uploading models, creating endpoints, deploying models, and making test requests. See `docs/markdown/scripts.md` for full descriptions and usage examples. Common scripts include:
+
+- `myconfig.ps1` — loads `.env` and populates environment variables
+- `build.ps1` — `gcloud builds submit` to build/push image
+- `upload.ps1` — `gcloud ai models upload`
+- `model_id.ps1`, `endpoint.ps1` — fetch or create endpoint and model ids
+- `deploy.ps1` — deploy model to endpoint
+- `gcl_re.ps1` — convenience wrapper to run a sequence of these helpers (supports dry-run and partial execution)
+
+Example:
+
+```powershell
+. .\scripts\myconfig.ps1
+.\scripts\build.ps1
+.\scripts\upload.ps1
+.\scripts\model_id.ps1
+.\scripts\deploy.ps1
 ```

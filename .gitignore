@@ -130,4 +130,4 @@ docker-compose.override.yml
 config.local.yaml
 .secrets/
 
-.myconfig
+Docs_m/

@@ -31,6 +31,7 @@ class Job:
     aspect_ratio: str
     motion_score: Optional[Union[int, str]]
     seed: Optional[int]
+    num_steps: Optional[int]
     mode: str
     fps: int
     num_samples: int
@@ -65,6 +66,7 @@ class Job:
             "aspect_ratio": self.aspect_ratio,
             "motion_score": self.motion_score,
             "seed": self.seed,
+            "num_steps": self.num_steps,
             "mode": self.mode,
             "fps": self.fps,
             "num_samples": self.num_samples,
