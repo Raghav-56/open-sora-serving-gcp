@@ -15,7 +15,7 @@ loguru==0.7.2
 
 # Documentation
 mkdocs==1.6.1
-mkdocs-material==9.5.39
+mkdocs-material==9.7.7
 pymdown-extensions==10.11.2
 
 # Development & Testing (optional - comment out for production-only installs)
